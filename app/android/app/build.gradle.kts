@@ -49,7 +49,9 @@ android {
     }
 
     defaultConfig {
-        applicationId = "io.github.ccch1mneyyy.dsh_app"
+        // 平行测试版: distinct app id so it installs beside the original official
+        // build without touching its data. Same namespace (code paths unchanged).
+        applicationId = "io.github.ccch1mneyyy.dsh_app.screenshare"
         // java.nio.file (symlinks while unpacking the rootfs) needs API 26.
         minSdk = 26
         // Target 28 like Termux, so the API 29+ exec restriction on app-private
