@@ -26,6 +26,12 @@ class ChatCallConversation implements CallConversation {
   String? _id;
   bool _disposed = false;
 
+  /// 屏幕共享: the newest captured screen frame (replaced every few seconds while
+  /// sharing is on). It is attached to the person's next message so the AI sees
+  /// the screen only when they actually say something — never as its own turn,
+  /// which would keep interrupting the conversation.
+  Uint8List? screenFrame;
+
   /// The assistant steps already there before the last send.
   Set<String> _before = const {};
   bool _tracking = false;
@@ -79,7 +85,13 @@ class ChatCallConversation implements CallConversation {
     if (state.singleQuestion case final request? when state.openApproval == null) {
       ok = await chat.answer(request, [QuestionAnswer(request.questions.single.id, custom: text)]);
     } else {
-      ok = await chat.send(text);
+      final frame = (screenFrame != null && _asksAboutScreen(text)) ? screenFrame : null;
+      ok = await chat.send(
+        text,
+        attachments: [
+          if (frame != null) DraftAttachment(name: 'screen.png', bytes: frame, mediaType: 'image/png'),
+        ],
+      );
     }
     if (!ok) {
       _tracking = false;
@@ -94,25 +106,11 @@ class ChatCallConversation implements CallConversation {
     return true;
   }
 
-  /// 屏幕共享: send a captured screen frame into the conversation as an inline
-  /// image, so the AI sees what is on screen. Skips while a turn is running so
-  /// frames do not overlap with a reply that is still streaming. The reply to
-  /// this image turn is not read aloud (it is context, not a spoken answer).
-  Future<bool> sendScreenFrame(Uint8List png) async {
-    final id = _id ?? await _session();
-    if (id == null || _disposed) return false;
-    _follow(id);
-    var state = _container.read(chatProvider(id));
-    if (state.running) return false;
-    final chat = _container.read(chatProvider(id).notifier);
-    if (!state.controlReady && !await chat.waitForSync()) return false;
-    if (_disposed) return false;
-    state = _container.read(chatProvider(id));
-    if (state.running) return false;
-    return chat.send(
-      '',
-      attachments: [DraftAttachment(name: 'screen.png', bytes: png, mediaType: 'image/png')],
-    );
+  /// Whether what the person said refers to what is on screen — only then is the
+  /// latest frame attached. Keeps the AI from reading the screen on every turn.
+  static bool _asksAboutScreen(String text) {
+    const words = ['屏幕', '画面', '看看', '看一下', '看下', '这个', '这里', '上面', '界面', '页面', '显示', '图'];
+    return words.any(text.contains);
   }
 
   void _changed(ChatState state) {
