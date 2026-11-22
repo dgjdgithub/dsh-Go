@@ -6,6 +6,9 @@
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+    <!-- 语音通话后台保活: a microphone-type foreground service keeps the call's
+         AudioRecord alive when the app is backgrounded. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <!-- The live activity (notify/LiveActivity.kt): Android 16 QPR1+ promotes it to a Live Update.
          Normal, granted at install; older systems skip a permission they don't define. -->
@@ -255,6 +258,12 @@
                 android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
                 android:value="Runs the user's local DeepSeek Harness agent server" />
         </service>
+
+        <!-- 语音通话后台保活: keeps the call's microphone alive when backgrounded. -->
+        <service
+            android:name=".speech.CallForegroundService"
+            android:exported="false"
+            android:foregroundServiceType="microphone" />
 
         <!-- Keeps the floating pet's process up when only remote hosts are used (pet/PetOverlayService.kt). -->
         <service
