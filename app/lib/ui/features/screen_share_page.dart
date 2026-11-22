@@ -103,7 +103,7 @@ class _ScreenSharePageState extends State<ScreenSharePage> {
                           ),
                         )
                       : ClipRRect(
-                          borderRadius: BorderRadius.circular(AppShape.radiusMd),
+                          borderRadius: AppShape.radiusMd,
                           child: Image.memory(_png!, fit: BoxFit.contain),
                         ),
                 ),
