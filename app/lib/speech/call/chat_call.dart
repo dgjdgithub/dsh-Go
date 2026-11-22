@@ -42,6 +42,69 @@ class ChatCallConversation implements CallConversation {
   /// Drop the buffered frames when sharing stops.
   void clearScreenFrames() => _screenFrames.clear();
 
+  /// 盯屏: set by a spoken request like「帮我盯着…，没了告诉我」. While on, the
+  /// page pushes a frame every few seconds and [watchTick] asks the AI whether
+  /// the thing is still there; the answer is silent unless it is gone.
+  bool _watching = false;
+  String _watchInstruction = '';
+  bool _watchBusy = false;
+
+  bool get watching => _watching;
+
+  void stopWatching() {
+    _watching = false;
+    _watchInstruction = '';
+  }
+
+  static bool _isWatchRequest(String text) {
+    if (text.contains('盯')) return true;
+    const ends = ['通知', '告诉', '提醒', '没了', '不见', '消失'];
+    return text.contains('看') && ends.any(text.contains);
+  }
+
+  static bool _isStopWatch(String text) {
+    const words = ['别盯', '不盯', '停止盯', '停止监控', '不用盯', '别监控', '取消监控'];
+    return words.any(text.contains);
+  }
+
+  /// One silent watch check. Returns the AI's answer text (e.g. 还在 / 不在了),
+  /// or null when it could not check now (a turn is running, or no reply yet).
+  Future<String?> watchTick(Uint8List frame) async {
+    if (!_watching || _watchBusy || _disposed) return null;
+    final id = _id ?? await _session();
+    if (id == null || _disposed) return null;
+    _follow(id);
+    var state = _container.read(chatProvider(id));
+    if (state.running) return null;
+    _watchBusy = true;
+    try {
+      final before = {
+        for (final item in state.items)
+          if (item is AssistantChatItem) item.key,
+      };
+      final ok = await _container.read(chatProvider(id).notifier).send(
+        '（屏幕监控，不要朗读这条）看这张截图。我之前让你盯的是：$_watchInstruction。'
+        '如果它已经不在了，只回答“不在了”；否则只回答“还在”。不要解释。',
+        attachments: [DraftAttachment(name: 'watch.png', bytes: frame, mediaType: 'image/png')],
+      );
+      if (!ok) return null;
+      for (var i = 0; i < 30; i++) {
+        await Future.delayed(const Duration(milliseconds: 500));
+        if (_disposed) return null;
+        final s = _container.read(chatProvider(id));
+        final steps = [
+          for (final item in s.items)
+            if (item is AssistantChatItem && !before.contains(item.key)) item.text.trim(),
+        ];
+        final text = steps.join('\n').trim();
+        if (text.isNotEmpty && !s.running) return text;
+      }
+      return null;
+    } finally {
+      _watchBusy = false;
+    }
+  }
+
   /// The assistant steps already there before the last send.
   Set<String> _before = const {};
   bool _tracking = false;
@@ -74,6 +137,12 @@ class ChatCallConversation implements CallConversation {
 
   @override
   Future<bool> send(String text) async {
+    if (_isStopWatch(text)) {
+      stopWatching();
+    } else if (_isWatchRequest(text)) {
+      _watching = true;
+      _watchInstruction = text;
+    }
     final id = await _session();
     // The call ended while its conversation was made: nothing to follow.
     if (id == null || _disposed) return false;

@@ -621,6 +621,16 @@ class VoiceCallController extends ChangeNotifier {
 
   void hangUp() => _end(CallEnd.hungUp);
 
+  /// 盯屏: say a short sentence now, outside a turn — used when a watched thing
+  /// on the screen disappears, so the person hears it in the call.
+  void announce(String text) {
+    if (_phase == CallPhase.ended || text.trim().isEmpty) return;
+    final out = _out ??= _newVoice();
+    out.add(text);
+    out.finish();
+    if (_phase != CallPhase.speaking) _set(CallPhase.speaking);
+  }
+
   /// The app went to the background: Android gives a backgrounded app no
   /// microphone, so the call ends rather than listen to silence.
   void backgrounded() {
