@@ -10,6 +10,7 @@
 import 'dart:async';
 import 'dart:io';
 import 'dart:math' as math;
+import 'dart:typed_data';
 import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
@@ -117,8 +118,9 @@ class _VoiceCallPageState extends ConsumerState<VoiceCallPage> with WidgetsBindi
 
   /// 屏幕共享: the projection token is held while sharing; each tap of the key
   /// asks once (the system sheet lets the person pick the whole screen or one
-  /// window) and starts mirroring until turned off.
+  /// window) and streams frames every few seconds until turned off.
   bool _sharing = false;
+  StreamSubscription<Uint8List>? _shareSub;
 
   /// The system asks for less motion (read each build): the light holds still
   /// and the page comes in without its staggered rise.
@@ -328,6 +330,8 @@ class _VoiceCallPageState extends ConsumerState<VoiceCallPage> with WidgetsBindi
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    _shareSub?.cancel();
+    unawaited(ScreenCapture.stopSharing());
     unawaited(_live?.stop());
     _leave?.cancel();
     _enter.dispose();
@@ -343,29 +347,34 @@ class _VoiceCallPageState extends ConsumerState<VoiceCallPage> with WidgetsBindi
     _call.hangUp();
   }
 
-  /// 共享屏幕: turn screen sharing on or off. Turning on asks the system once
-  /// (the person chooses the whole screen or a single window there).
+  /// 共享屏幕: toggle continuous capture. Turning on asks the system once
+  /// (the person picks the whole screen or one window) and then streams frames;
+  /// turning off stops it.
   Future<void> _toggleScreenShare() async {
     HapticFeedback.selectionClick();
     if (_sharing) {
-      await ScreenCapture.release();
+      _shareSub?.cancel();
+      _shareSub = null;
+      await ScreenCapture.stopSharing();
       if (mounted) setState(() => _sharing = false);
       return;
     }
     try {
-      final granted = await ScreenCapture.requestPermission();
+      final started = await ScreenCapture.startSharing();
       if (!mounted) return;
-      setState(() => _sharing = granted);
-      if (!granted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('未授予屏幕共享权限')),
-        );
+      if (started) {
+        _shareSub = ScreenCapture.frames().listen((_) {
+          // Frames arrive; a full in-call viewer is a later step. Keeping the
+          // subscription drains them so the native queue stays current.
+        });
+      }
+      setState(() => _sharing = started);
+      if (!started) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('未授予屏幕共享权限')));
       }
     } catch (_) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('此设备不支持屏幕共享')),
-      );
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('此设备不支持屏幕共享')));
     }
   }
 

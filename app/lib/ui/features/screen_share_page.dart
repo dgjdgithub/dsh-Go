@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
@@ -7,11 +8,10 @@ import '../theme/app_icons.dart';
 import '../theme/glass.dart';
 import '../theme/theme.dart';
 
-/// 屏幕共享 / 截屏: a self-contained page in 全部功能.
-///
-/// The user taps 共享屏幕 → the system's screen-capture consent sheet → the
-/// current screen is captured once and shown here (and can be saved/copied).
-/// Nothing runs in the background; each capture is one explicit tap.
+/// 屏幕共享: continuous. Tap 开始共享 → system consent (whole screen or one
+/// window) → the newest screen frame arrives every few seconds and is shown
+/// here, refreshing in place. Tap again to stop. Android only; each fresh
+/// projection token needs its own consent (the system re-asks after a stop).
 class ScreenSharePage extends StatefulWidget {
   const ScreenSharePage({super.key});
 
@@ -22,54 +22,52 @@ class ScreenSharePage extends StatefulWidget {
 }
 
 class _ScreenSharePageState extends State<ScreenSharePage> {
-  Uint8List? _png;
+  static const _intervalMs = 3000;
+
+  StreamSubscription<Uint8List>? _sub;
+  Uint8List? _frame;
   String? _error;
   bool _busy = false;
-  bool _supported = true;
+  bool _sharing = false;
 
   @override
-  void initState() {
-    super.initState();
-    _checkSupport();
+  void dispose() {
+    _stopSub();
+    // Release the projection when leaving the page.
+    unawaited(ScreenCapture.stopSharing());
+    super.dispose();
   }
 
-  Future<void> _checkSupport() async {
-    final ok = await ScreenCapture.hasPermission();
-    // hasPermission returns false both for "not granted" and "no channel";
-    // distinguish by trying a harmless call that throws MissingPluginException
-    // only when the plugin is absent.
-    if (!ok) {
-      try {
-        await ScreenCapture.hasPermission();
-        _supported = true;
-      } catch (_) {
-        _supported = false;
-      }
-    }
-    if (mounted) setState(() {});
+  void _stopSub() {
+    _sub?.cancel();
+    _sub = null;
   }
 
-  Future<void> _capture() async {
-    setState(() {
-      _busy = true;
-      _error = null;
-    });
+  Future<void> _start() async {
+    setState(() { _busy = true; _error = null; });
     try {
-      final bytes = await ScreenCapture.captureOnce();
+      final started = await ScreenCapture.startSharing(intervalMs: _intervalMs);
       if (!mounted) return;
-      setState(() {
-        _png = bytes;
-        _busy = false;
-        _error = bytes == null ? '未授予屏幕共享权限' : null;
-      });
+      if (!started) {
+        setState(() { _busy = false; _error = '未授予屏幕共享权限'; });
+        return;
+      }
+      _stopSub();
+      _sub = ScreenCapture.frames().listen(
+        (bytes) { if (mounted) setState(() { _frame = bytes; _busy = false; }); },
+        onError: (e) { if (mounted) setState(() { _error = '读取画面失败：$e'; _busy = false; }); },
+      );
+      setState(() { _sharing = true; _busy = false; });
     } catch (e) {
       if (!mounted) return;
-      setState(() {
-        _busy = false;
-        _supported = false;
-        _error = '此设备不支持屏幕共享：$e';
-      });
+      setState(() { _busy = false; _sharing = false; _error = '此设备不支持屏幕共享：$e'; });
     }
+  }
+
+  Future<void> _stop() async {
+    _stopSub();
+    await ScreenCapture.stopSharing();
+    if (mounted) setState(() { _sharing = false; _frame = null; });
   }
 
   @override
@@ -88,14 +86,14 @@ class _ScreenSharePageState extends State<ScreenSharePage> {
                 borderRadius: AppShape.radiusLg,
                 child: Padding(
                   padding: const EdgeInsets.all(12),
-                  child: _png == null
+                  child: _frame == null
                       ? SizedBox(
                           height: 220,
                           child: Center(
                             child: _busy
                                 ? const CircularProgressIndicator()
                                 : Text(
-                                    _supported ? '点下方按钮共享当前屏幕' : '此设备不支持屏幕共享',
+                                    _sharing ? '等待第一帧画面…' : '点下方按钮开始共享屏幕（每 3 秒刷新）',
                                     style: theme.textTheme.bodyMedium?.copyWith(
                                       color: theme.colorScheme.onSurfaceVariant,
                                     ),
@@ -104,7 +102,7 @@ class _ScreenSharePageState extends State<ScreenSharePage> {
                         )
                       : ClipRRect(
                           borderRadius: AppShape.radiusMd,
-                          child: Image.memory(_png!, fit: BoxFit.contain),
+                          child: Image.memory(_frame!, fit: BoxFit.contain, gaplessPlayback: true),
                         ),
                 ),
               ),
@@ -114,9 +112,9 @@ class _ScreenSharePageState extends State<ScreenSharePage> {
               ],
               const Spacer(),
               FilledButton.icon(
-                onPressed: _busy || !_supported ? null : _capture,
-                icon: const Icon(AppIcons.camera),
-                label: Text(_busy ? '截取中…' : '共享屏幕 / 截屏'),
+                onPressed: _busy ? null : (_sharing ? _stop : _start),
+                icon: Icon(_sharing ? AppIcons.stopSharing : AppIcons.camera),
+                label: Text(_busy ? '启动中…' : (_sharing ? '停止共享' : '开始共享屏幕')),
               ),
             ],
           ),

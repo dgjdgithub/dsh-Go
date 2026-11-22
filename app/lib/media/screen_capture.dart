@@ -1,18 +1,21 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:flutter/services.dart';
 
-/// 屏幕共享 / 截屏: the Dart side of `screencap/ScreenCapturePlugin.kt`.
+/// 屏幕共享: the Dart side of `screencap/ScreenCapturePlugin.kt`.
 ///
-/// [requestPermission] shows the system's screen-capture consent sheet;
-/// [captureOnce] returns the current screen as PNG bytes. Android only. On any
-/// other OS, or when the native channel is absent, both throw a
-/// [MissingPluginException] that callers should surface as "此设备不支持".
+/// [requestPermission] shows the system's screen-capture consent sheet (the
+/// person picks the whole screen or one window there). After that:
+///  - [startSharing]/[frames] stream the newest screen frame as PNG/JPEG bytes at
+///    a chosen interval (default 3 s), for continuous sharing.
+///  - [captureOnce] grabs a single PNG frame.
 class ScreenCapture {
   ScreenCapture._();
 
   static const _channel = MethodChannel('dsh/screencap');
+  static const _frames = EventChannel('dsh/screencap/frames');
 
   /// Whether a projection token is already granted (no dialog needed).
   static Future<bool> hasPermission() async {
@@ -28,8 +31,36 @@ class ScreenCapture {
     return await _channel.invokeMethod<bool>('requestPermission') ?? false;
   }
 
-  /// Grab the current screen as PNG bytes. If [ensurePermission] is true and no
-  /// token is held yet, asks first. Returns null if permission is denied.
+  /// Continuous screen frames (base64 JPEG strings) at [intervalMs].
+  /// Call [startSharing] first, then listen here.
+  static Stream<Uint8List> frames() {
+    return _frames.receiveBroadcastStream().map((event) {
+      final b64 = event as String;
+      return base64Decode(b64);
+    });
+  }
+
+  /// Begin continuous capture at [intervalMs] (default 3 s). Asks for
+  /// permission first if none is held yet. Returns true when sharing started.
+  static Future<bool> startSharing({int intervalMs = 3000, bool ensurePermission = true}) async {
+    if (ensurePermission && !await hasPermission()) {
+      final granted = await requestPermission();
+      if (!granted) return false;
+    }
+    await _channel.invokeMethod<void>('startSharing', {'intervalMs': intervalMs});
+    return true;
+  }
+
+  /// Stop continuous capture.
+  static Future<void> stopSharing() async {
+    try {
+      await _channel.invokeMethod<void>('stopSharing');
+    } on MissingPluginException {
+      // Nothing to stop.
+    }
+  }
+
+  /// Grab the current screen once as PNG bytes.
   static Future<Uint8List?> captureOnce({bool ensurePermission = true}) async {
     if (ensurePermission && !await hasPermission()) {
       final granted = await requestPermission();
@@ -40,7 +71,7 @@ class ScreenCapture {
     return base64Decode(b64);
   }
 
-  /// Drop the projection token held natively.
+  /// Drop any projection token held natively.
   static Future<void> release() async {
     try {
       await _channel.invokeMethod<void>('release');
