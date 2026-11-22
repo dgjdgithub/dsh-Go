@@ -26,11 +26,21 @@ class ChatCallConversation implements CallConversation {
   String? _id;
   bool _disposed = false;
 
-  /// 屏幕共享: the newest captured screen frame (replaced every few seconds while
-  /// sharing is on). It is attached to the person's next message so the AI sees
-  /// the screen only when they actually say something — never as its own turn,
-  /// which would keep interrupting the conversation.
-  Uint8List? screenFrame;
+  /// 屏幕共享: the most recent captured frames (oldest first). Frames are pushed
+  /// about once a second while sharing is on; they are never sent on their own.
+  /// When the person says something that refers to the screen, the newest frame
+  /// (and, for a change/error question, the one before it) rides along with that
+  /// message, so the AI sees the screen as of the question.
+  final List<Uint8List> _screenFrames = [];
+
+  /// Feed one captured frame; keeps the last few for a before/after comparison.
+  void pushScreenFrame(Uint8List frame) {
+    _screenFrames.add(frame);
+    if (_screenFrames.length > 4) _screenFrames.removeAt(0);
+  }
+
+  /// Drop the buffered frames when sharing stops.
+  void clearScreenFrames() => _screenFrames.clear();
 
   /// The assistant steps already there before the last send.
   Set<String> _before = const {};
@@ -85,13 +95,7 @@ class ChatCallConversation implements CallConversation {
     if (state.singleQuestion case final request? when state.openApproval == null) {
       ok = await chat.answer(request, [QuestionAnswer(request.questions.single.id, custom: text)]);
     } else {
-      final frame = (screenFrame != null && _asksAboutScreen(text)) ? screenFrame : null;
-      ok = await chat.send(
-        text,
-        attachments: [
-          if (frame != null) DraftAttachment(name: 'screen.png', bytes: frame, mediaType: 'image/png'),
-        ],
-      );
+      ok = await chat.send(text, attachments: _screenAttachmentsFor(text));
     }
     if (!ok) {
       _tracking = false;
@@ -106,10 +110,34 @@ class ChatCallConversation implements CallConversation {
     return true;
   }
 
-  /// Whether what the person said refers to what is on screen — only then is the
-  /// latest frame attached. Keeps the AI from reading the screen on every turn.
+  /// 屏幕共享: pick the frames to ride along with this message. Nothing when the
+  /// person is not talking about the screen; the newest frame when they are; the
+  /// previous one too when they ask what changed or what went wrong.
+  List<DraftAttachment> _screenAttachmentsFor(String text) {
+    if (_screenFrames.isEmpty || !_asksAboutScreen(text)) return const [];
+    final picked = <Uint8List>[_screenFrames.last];
+    if (_asksWhatChanged(text) && _screenFrames.length >= 2) {
+      picked.add(_screenFrames[_screenFrames.length - 2]);
+    }
+    final stamp = DateTime.now().millisecondsSinceEpoch;
+    return [
+      for (var i = 0; i < picked.length; i++)
+        DraftAttachment(name: 'screen-$stamp-$i.png', bytes: picked[i], mediaType: 'image/png'),
+    ];
+  }
+
+  /// Whether what the person said refers to what is on screen.
   static bool _asksAboutScreen(String text) {
-    const words = ['屏幕', '画面', '看看', '看一下', '看下', '这个', '这里', '上面', '界面', '页面', '显示', '图'];
+    const words = [
+      '屏幕', '画面', '看看', '看一下', '看下', '这个', '这里', '上面', '界面', '页面', '显示', '图',
+      '报错', '出错', '错误', '怎么回事', '为什么',
+    ];
+    return words.any(text.contains);
+  }
+
+  /// Whether it asks about a change or a problem — then the previous frame helps.
+  static bool _asksWhatChanged(String text) {
+    const words = ['刚才', '之前', '怎么', '为什么', '变了', '报错', '出错', '错误', '怎么回事'];
     return words.any(text.contains);
   }
 

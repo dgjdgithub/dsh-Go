@@ -332,7 +332,7 @@ class _VoiceCallPageState extends ConsumerState<VoiceCallPage> with WidgetsBindi
     WidgetsBinding.instance.removeObserver(this);
     _shareSub?.cancel();
     final conversation = widget.conversation;
-    if (conversation is ChatCallConversation) conversation.screenFrame = null;
+    if (conversation is ChatCallConversation) conversation.clearScreenFrames();
     unawaited(ScreenCapture.stopSharing());
     unawaited(_live?.stop());
     _leave?.cancel();
@@ -359,18 +359,18 @@ class _VoiceCallPageState extends ConsumerState<VoiceCallPage> with WidgetsBindi
       _shareSub = null;
       await ScreenCapture.stopSharing();
       final conversation = widget.conversation;
-      if (conversation is ChatCallConversation) conversation.screenFrame = null;
+      if (conversation is ChatCallConversation) conversation.clearScreenFrames();
       if (mounted) setState(() => _sharing = false);
       return;
     }
     try {
-      final started = await ScreenCapture.startSharing();
+      final started = await ScreenCapture.startSharing(intervalMs: 1000);
       if (!mounted) return;
       if (started) {
         final conversation = widget.conversation;
         _shareSub = ScreenCapture.frames().listen((bytes) {
           // 每 3 秒一帧：只存最新一帧；等你说话时随消息带给 AI，不单独发、不打断。
-          if (conversation is ChatCallConversation) conversation.screenFrame = bytes;
+          if (conversation is ChatCallConversation) conversation.pushScreenFrame(bytes);
         });
       }
       setState(() => _sharing = started);
