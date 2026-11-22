@@ -363,9 +363,12 @@ class _VoiceCallPageState extends ConsumerState<VoiceCallPage> with WidgetsBindi
       final started = await ScreenCapture.startSharing();
       if (!mounted) return;
       if (started) {
-        _shareSub = ScreenCapture.frames().listen((_) {
-          // Frames arrive; a full in-call viewer is a later step. Keeping the
-          // subscription drains them so the native queue stays current.
+        final conversation = widget.conversation;
+        _shareSub = ScreenCapture.frames().listen((bytes) {
+          // 每 3 秒一帧：发进当前对话，让 AI 看到屏幕。
+          if (conversation is ChatCallConversation) {
+            unawaited(conversation.sendScreenFrame(bytes));
+          }
         });
       }
       setState(() => _sharing = started);

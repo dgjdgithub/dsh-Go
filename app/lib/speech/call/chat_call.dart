@@ -4,10 +4,12 @@
 // read in order (「我查一下」 before a tool call is said too).
 
 import 'dart:async';
+import 'dart:typed_data';
 
 import 'package:dsh_client/dsh_client.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../state/attachments.dart';
 import '../../state/chat_state.dart';
 import '../../state/hosts_state.dart';
 import '../../state/notify_state.dart';
@@ -90,6 +92,27 @@ class ChatCallConversation implements CallConversation {
       if (_tracking && !_sawRunning) _done();
     });
     return true;
+  }
+
+  /// 屏幕共享: send a captured screen frame into the conversation as an inline
+  /// image, so the AI sees what is on screen. Skips while a turn is running so
+  /// frames do not overlap with a reply that is still streaming. The reply to
+  /// this image turn is not read aloud (it is context, not a spoken answer).
+  Future<bool> sendScreenFrame(Uint8List png) async {
+    final id = _id ?? await _session();
+    if (id == null || _disposed) return false;
+    _follow(id);
+    var state = _container.read(chatProvider(id));
+    if (state.running) return false;
+    final chat = _container.read(chatProvider(id).notifier);
+    if (!state.controlReady && !await chat.waitForSync()) return false;
+    if (_disposed) return false;
+    state = _container.read(chatProvider(id));
+    if (state.running) return false;
+    return chat.send(
+      '',
+      attachments: [DraftAttachment(name: 'screen.png', bytes: png, mediaType: 'image/png')],
+    );
   }
 
   void _changed(ChatState state) {
