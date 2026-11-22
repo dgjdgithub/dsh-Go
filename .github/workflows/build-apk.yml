@@ -82,6 +82,15 @@ jobs:
           cd app
           flutter pub get --enforce-lockfile
 
+      - name: Restore runtime cache
+        id: runtime-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            runtime/out
+            runtime/.cache
+          key: runtime-${{ github.event.inputs.flavor || 'arm64' }}-${{ hashFiles('runtime/patches/pins.json', 'runtime/tawcroot/source.json', 'runtime/locks/*.json', 'runtime/build-runtime.sh') }}
+
       - name: Build runtime (rootfs + engine assets)
         env:
           FLAVOR: ${{ github.event.inputs.flavor || 'arm64' }}
@@ -92,13 +101,61 @@ jobs:
             x64) abi=x86_64 ;;
             all) abi="x86_64 arm64-v8a" ;;
           esac
-          runtime/build-runtime.sh $abi
+          # Skip the (slow) rootfs build when this exact runtime is already restored.
+          want=""
+          [ "$abi" = "x86_64" ] && want="x86_64"
+          [ "$abi" = "arm64-v8a" ] && want="arm64-v8a"
+          if [ -n "$want" ] && [ -f "runtime/out/$want/assets/runtime/manifest.json" ]; then
+            echo "runtime $want already present from cache; skipping build"
+          else
+            runtime/build-runtime.sh $abi
+          fi
+
+      - name: Save runtime cache
+        if: steps.runtime-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            runtime/out
+            runtime/.cache
+          key: runtime-${{ github.event.inputs.flavor || 'arm64' }}-${{ hashFiles('runtime/patches/pins.json', 'runtime/tawcroot/source.json', 'runtime/locks/*.json', 'runtime/build-runtime.sh') }}
 
       - name: Build APK
         env:
           FLAVOR: ${{ github.event.inputs.flavor || 'arm64' }}
           MODE: ${{ github.event.inputs.mode || 'release' }}
         run: |
+          # Route Gradle plugin resolution through mirrors: on some runners
+          # plugins.gradle.org is unreachable (kotlin-stdlib 2.2.21 404s), while
+          # the Aliyun mirrors serve the same artifacts.
+          mkdir -p "$HOME/.gradle"
+          cat > "$HOME/.gradle/init.gradle" <<'EOF'
+          beforeSettings { settings ->
+            settings.pluginManagement.repositories {
+              maven { url 'https://maven.aliyun.com/repository/gradle-plugin' }
+              maven { url 'https://maven.aliyun.com/repository/central' }
+              maven { url 'https://maven.aliyun.com/repository/google' }
+              gradlePluginPortal()
+            }
+          }
+          allprojects {
+            buildscript {
+              repositories {
+                maven { url 'https://maven.aliyun.com/repository/gradle-plugin' }
+                maven { url 'https://maven.aliyun.com/repository/central' }
+                maven { url 'https://maven.aliyun.com/repository/google' }
+                google()
+                mavenCentral()
+              }
+            }
+            repositories {
+              maven { url 'https://maven.aliyun.com/repository/google' }
+              maven { url 'https://maven.aliyun.com/repository/central' }
+              google()
+              mavenCentral()
+            }
+          }
+          EOF
           chmod +x tooling/build-apk.sh
           tooling/build-apk.sh --flavor "$FLAVOR" --"$MODE"
       - name: Upload APKs
