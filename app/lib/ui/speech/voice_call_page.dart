@@ -19,6 +19,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../companion/companion_voice.dart';
 import '../../companion/companion_voice_source.dart';
 import '../../l10n/l10n.dart';
+import '../../media/screen_capture.dart';
 import '../../performance/performance_state.dart';
 import '../../state/android_features.dart' show operatingSystemProvider;
 import '../../speech/call/chat_call.dart';
@@ -113,6 +114,11 @@ class _VoiceCallPageState extends ConsumerState<VoiceCallPage> with WidgetsBindi
 
   /// A finger on the light: it gives a little.
   bool _pressed = false;
+
+  /// 屏幕共享: the projection token is held while sharing; each tap of the key
+  /// asks once (the system sheet lets the person pick the whole screen or one
+  /// window) and starts mirroring until turned off.
+  bool _sharing = false;
 
   /// The system asks for less motion (read each build): the light holds still
   /// and the page comes in without its staggered rise.
@@ -313,7 +319,10 @@ class _VoiceCallPageState extends ConsumerState<VoiceCallPage> with WidgetsBindi
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state == AppLifecycleState.paused || state == AppLifecycleState.hidden) _call.backgrounded();
+    // 允许后台: the call keeps going when the app is backgrounded (the native
+    // call foreground service holds the microphone and playback). Coming back
+    // just resumes drawing. Only an explicit hang-up ends the call.
+    if (state == AppLifecycleState.resumed) setState(() {});
   }
 
   @override
@@ -332,6 +341,32 @@ class _VoiceCallPageState extends ConsumerState<VoiceCallPage> with WidgetsBindi
   void _hangUp() {
     HapticFeedback.heavyImpact();
     _call.hangUp();
+  }
+
+  /// 共享屏幕: turn screen sharing on or off. Turning on asks the system once
+  /// (the person chooses the whole screen or a single window there).
+  Future<void> _toggleScreenShare() async {
+    HapticFeedback.selectionClick();
+    if (_sharing) {
+      await ScreenCapture.release();
+      if (mounted) setState(() => _sharing = false);
+      return;
+    }
+    try {
+      final granted = await ScreenCapture.requestPermission();
+      if (!mounted) return;
+      setState(() => _sharing = granted);
+      if (!granted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('未授予屏幕共享权限')),
+        );
+      }
+    } catch (_) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('此设备不支持屏幕共享')),
+      );
+    }
   }
 
   (String, bool) _status(L10n l10n) {
@@ -656,6 +691,18 @@ class _VoiceCallPageState extends ConsumerState<VoiceCallPage> with WidgetsBindi
                               onTap: ended ? null : () => _call.setMuted(!_call.muted),
                             ),
                             distance: 28,
+                          ),
+                          _rise(
+                            0.44,
+                            CallKey(
+                              key: const ValueKey('call-share-screen'),
+                              icon: AppIcons.shareImage,
+                              label: _sharing ? '停止共享' : '共享屏幕',
+                              on: _sharing,
+                              blur: keyBlur,
+                              onTap: ended ? null : () => unawaited(_toggleScreenShare()),
+                            ),
+                            distance: 26,
                           ),
                           _rise(
                             0.48,
