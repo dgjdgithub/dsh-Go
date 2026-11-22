@@ -63,6 +63,16 @@ jobs:
       - name: Enable Android SDK licenses
         run: yes | flutter doctor --android-licenses || true
 
+      - name: Install NDK 28.2.13676358
+        run: |
+          SDK="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-$HOME/Android/Sdk}}"
+          echo "SDK=$SDK"; ls "$SDK" || true
+          SDKMGR=$(ls "$SDK"/cmdline-tools/*/bin/sdkmanager 2>/dev/null | head -1)
+          echo "SDKMGR=$SDKMGR"
+          yes | "$SDKMGR" --install "ndk;28.2.13676358"
+          ls "$SDK/ndk" || true
+          grep -q '^sdk.dir=' app/android/local.properties 2>/dev/null || echo "sdk.dir=$SDK" >> app/android/local.properties
+
       - name: Get dependencies
         run: |
           cd app
