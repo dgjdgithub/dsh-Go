@@ -217,11 +217,25 @@ class ScreenCapturePlugin : FlutterPlugin, ActivityAware, MethodChannel.MethodCa
         val bmp = Bitmap.createBitmap(paddedWidth, height, Bitmap.Config.ARGB_8888)
         bmp.copyPixelsFromBuffer(plane.buffer)
         val cropped = if (paddedWidth != width) Bitmap.createBitmap(bmp, 0, 0, width, height) else bmp
+        // Keep frames small: a phone screenshot at 2K+ is far more pixels than a
+        // vision model needs, and an oversized image is rejected by the engine.
+        val scaled = downscale(cropped, MAX_FRAME_DIM)
         val out = ByteArrayOutputStream()
-        cropped.compress(Bitmap.CompressFormat.JPEG, 70, out)
+        scaled.compress(Bitmap.CompressFormat.JPEG, 70, out)
+        if (scaled !== cropped) scaled.recycle()
         if (cropped !== bmp) cropped.recycle()
         bmp.recycle()
         return out.toByteArray()
+    }
+
+    /** Scale [src] down so its longer side is at most [maxDim]; [src] itself when small enough. */
+    private fun downscale(src: Bitmap, maxDim: Int): Bitmap {
+        val longer = maxOf(src.width, src.height)
+        if (longer <= maxDim) return src
+        val ratio = maxDim.toFloat() / longer
+        val w = (src.width * ratio).toInt().coerceAtLeast(1)
+        val h = (src.height * ratio).toInt().coerceAtLeast(1)
+        return Bitmap.createScaledBitmap(src, w, h, true)
     }
 
     // ---- One-shot PNG ----
@@ -317,5 +331,8 @@ class ScreenCapturePlugin : FlutterPlugin, ActivityAware, MethodChannel.MethodCa
         runCatching { t?.quitSafely() }
     }
 
-    companion object { private const val REQ_PROJECTION = 0x5c01 }
+    companion object {
+        private const val REQ_PROJECTION = 0x5c01
+        private const val MAX_FRAME_DIM = 1280
+    }
 }

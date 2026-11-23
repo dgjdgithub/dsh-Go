@@ -85,7 +85,7 @@ class ChatCallConversation implements CallConversation {
       final ok = await _container.read(chatProvider(id).notifier).send(
         '（屏幕监控，不要朗读这条）看这张截图。我之前让你盯的是：$_watchInstruction。'
         '如果它已经不在了，只回答“不在了”；否则只回答“还在”。不要解释。',
-        attachments: [DraftAttachment(name: 'watch.png', bytes: frame, mediaType: 'image/png')],
+        attachments: [DraftAttachment.sniff('watch.jpg', frame)],
       );
       if (!ok) return null;
       for (var i = 0; i < 30; i++) {
@@ -164,7 +164,13 @@ class ChatCallConversation implements CallConversation {
     if (state.singleQuestion case final request? when state.openApproval == null) {
       ok = await chat.answer(request, [QuestionAnswer(request.questions.single.id, custom: text)]);
     } else {
-      ok = await chat.send(text, attachments: _screenAttachmentsFor(text));
+      final attachments = _screenAttachmentsFor(text);
+      ok = await chat.send(text, attachments: attachments);
+      if (!ok && attachments.isNotEmpty) {
+        // The image was refused (a text-only model, or an invalid frame): the
+        // words still go, so the conversation is not blocked by the picture.
+        ok = await chat.send(text);
+      }
     }
     if (!ok) {
       _tracking = false;
@@ -191,7 +197,7 @@ class ChatCallConversation implements CallConversation {
     final stamp = DateTime.now().millisecondsSinceEpoch;
     return [
       for (var i = 0; i < picked.length; i++)
-        DraftAttachment(name: 'screen-$stamp-$i.png', bytes: picked[i], mediaType: 'image/png'),
+        DraftAttachment.sniff('screen-$stamp-$i.jpg', picked[i]),
     ];
   }
 
