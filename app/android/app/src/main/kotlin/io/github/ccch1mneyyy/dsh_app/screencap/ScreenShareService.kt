@@ -3,6 +3,7 @@ package io.github.ccch1mneyyy.dsh_app.screencap
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
+import android.app.PendingIntent
 import android.app.Service
 import android.content.Context
 import android.content.Intent
@@ -52,10 +53,18 @@ class ScreenShareService : Service() {
         }
         return builder
             .setContentTitle("正在共享屏幕")
-            .setContentText("DSH 正在读取屏幕内容，点此回到应用")
+            .setContentText("DSH 正在看你的屏幕，点此回到通话")
             .setSmallIcon(android.R.drawable.ic_menu_view)
             .setOngoing(true)
+            .setContentIntent(openApp())
             .build()
+    }
+
+    /** Back to the app, where the call (and its return pill) still is. */
+    private fun openApp(): PendingIntent? {
+        val launch = packageManager.getLaunchIntentForPackage(packageName) ?: return null
+        launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+        return PendingIntent.getActivity(this, 0, launch, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
     }
 
     companion object {

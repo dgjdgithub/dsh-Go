@@ -4,15 +4,14 @@ import 'dart:typed_data';
 import 'package:flutter/material.dart';
 
 import '../../media/screen_capture.dart';
-import '../../media/screen_frame_store.dart';
 import '../theme/app_icons.dart';
-import '../theme/glass.dart';
 import '../theme/theme.dart';
 
 /// 屏幕共享: continuous. Tap 开始共享 → system consent (whole screen or one
 /// window) → the newest screen frame arrives every few seconds and is shown
 /// here, refreshing in place. Tap again to stop. Android only; each fresh
 /// projection token needs its own consent (the system re-asks after a stop).
+/// Sharing a call already started is only watched here, never stopped.
 class ScreenSharePage extends StatefulWidget {
   const ScreenSharePage({super.key});
 
@@ -25,7 +24,10 @@ class ScreenSharePage extends StatefulWidget {
 class _ScreenSharePageState extends State<ScreenSharePage> {
   static const _intervalMs = 3000;
 
-  StreamSubscription<Uint8List>? _sub;
+  StreamSubscription<VisionFrame>? _sub;
+
+  /// This page started the sharing (not a call): it stops it too.
+  bool _mine = false;
   Uint8List? _frame;
   String? _error;
   bool _busy = false;
@@ -34,8 +36,8 @@ class _ScreenSharePageState extends State<ScreenSharePage> {
   @override
   void dispose() {
     _stopSub();
-    // Release the projection when leaving the page.
-    unawaited(ScreenCapture.stopSharing());
+    // Release the projection when leaving the page (a call's stays).
+    if (_mine) unawaited(ScreenCapture.stopSharing());
     super.dispose();
   }
 
@@ -47,7 +49,9 @@ class _ScreenSharePageState extends State<ScreenSharePage> {
   Future<void> _start() async {
     setState(() { _busy = true; _error = null; });
     try {
-      final started = await ScreenCapture.startSharing(intervalMs: _intervalMs);
+      final already = await ScreenCapture.isSharing();
+      final started = already || await ScreenCapture.startSharing(intervalMs: _intervalMs);
+      _mine = started && !already;
       if (!mounted) return;
       if (!started) {
         setState(() { _busy = false; _error = '未授予屏幕共享权限'; });
@@ -55,9 +59,10 @@ class _ScreenSharePageState extends State<ScreenSharePage> {
       }
       _stopSub();
       _sub = ScreenCapture.frames().listen(
-        (bytes) {
-          unawaited(ScreenFrameStore.write(bytes));
-          if (mounted) setState(() { _frame = bytes; _busy = false; });
+        (frame) {
+          final bytes = frame.jpeg;
+          if (bytes == null || !mounted) return;
+          setState(() { _frame = bytes; _busy = false; });
         },
         onError: (e) { if (mounted) setState(() { _error = '读取画面失败：$e'; _busy = false; _sharing = false; }); },
       );
@@ -70,7 +75,8 @@ class _ScreenSharePageState extends State<ScreenSharePage> {
 
   Future<void> _stop() async {
     _stopSub();
-    await ScreenCapture.stopSharing();
+    if (_mine) await ScreenCapture.stopSharing();
+    _mine = false;
     if (mounted) setState(() { _sharing = false; _frame = null; });
   }
 

@@ -134,5 +134,57 @@
   "speechCallVisualRing": "Ring",
   "speechCallVisualMono": "Line",
   "speechCallVisualGlass": "Orb",
-  "speechInsecure": "That service's address isn't https; the key can't be sent that way"
+  "speechInsecure": "That service's address isn't https; the key can't be sent that way",
+  "speechCallScreen": "Share screen",
+  "speechCallScreenStop": "Stop sharing",
+  "speechCallScreenDeclined": "Screen sharing wasn't allowed",
+  "speechCallScreenFailed": "Screen sharing couldn't start on this phone",
+  "speechCallScreenStopped": "The system stopped screen sharing",
+  "speechCallCamera": "Camera",
+  "speechCallCameraStop": "Camera off",
+  "speechCallCameraDeclined": "No camera permission",
+  "speechCallCameraFailed": "The camera couldn't open",
+  "speechCallCameraStopped": "The camera stopped",
+  "speechCallCameraSwitch": "Switch camera",
+  "speechCallWatching": "Watching for: {condition}",
+  "@speechCallWatching": {
+    "placeholders": {
+      "condition": {
+        "type": "String"
+      }
+    }
+  },
+  "speechCallWatchMet": "What you asked me to watch for is here: {condition}",
+  "@speechCallWatchMet": {
+    "placeholders": {
+      "condition": {
+        "type": "String"
+      }
+    }
+  },
+  "speechCallWatchExpired": "No sign of “{condition}” yet; I've stopped watching",
+  "@speechCallWatchExpired": {
+    "placeholders": {
+      "condition": {
+        "type": "String"
+      }
+    }
+  },
+  "speechCallVisionTimeUp": "Sharing has run for {minutes} minutes; I've stopped it",
+  "@speechCallVisionTimeUp": {
+    "placeholders": {
+      "minutes": {
+        "type": "int"
+      }
+    }
+  },
+  "speechCallVisionDown": "The vision model isn't answering; I've stopped watching",
+  "speechCallReturn": "Back to the call",
+  "speechVisionTitle": "Vision model",
+  "speechVisionHint": "Judges the picture when a call watches the screen or camera. An OpenAI-compatible endpoint (e.g. DeepSeek V4 Flash).",
+  "speechVisionBaseUrl": "Base URL",
+  "speechVisionModel": "Model",
+  "speechVisionKey": "API key",
+  "speechVisionCompanion": "Speak up while watching along",
+  "speechVisionCompanionHint": "While sharing, she mentions errors, pop-ups or finished tasks on her own (uses the vision model more)"
 }

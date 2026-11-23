@@ -222,15 +222,21 @@ enum AlertDelivery { none, banner, pet, system }
 
 /// System notification in the background, a banner in the foreground — or
 /// the pet's bubble when it is on screen ([petOnScreen]: one reminder, not
-/// two) — and nothing for the conversation already on screen.
+/// two) — and nothing for the conversation already on screen. A call's own
+/// conversation ([call]) is heard in the call, the app in the background or
+/// not: only what waits on the person (an approval, a question) is shown.
 AlertDelivery deliveryFor(
   ChatAlert alert, {
   required NotifyPrefs prefs,
   required bool foreground,
   ChatTarget? viewed,
+  ChatTarget? call,
   bool petOnScreen = false,
 }) {
   if (!prefs.allows(alert.kind)) return AlertDelivery.none;
+  if (call != null && call.host == alert.host && call.sessionId == alert.sessionId && !alert.kind.attention) {
+    return AlertDelivery.none;
+  }
   // A lifecycle listener may still see the last foreground viewed target.
   if (!foreground) return AlertDelivery.system;
   if (viewed != null && viewed.host == alert.host && viewed.sessionId == alert.sessionId) return AlertDelivery.none;
@@ -579,6 +585,7 @@ class ChatAlertsController extends Notifier<ChatAlert?> {
           prefs: ref.read(notifyPrefsProvider),
           foreground: ref.read(appForegroundProvider),
           viewed: ref.read(viewedChatProvider),
+          call: ref.read(callChatProvider),
           petOnScreen: ref.read(petOnScreenProvider),
         ) ==
         AlertDelivery.system) {
@@ -792,6 +799,7 @@ class ChatAlertsController extends Notifier<ChatAlert?> {
       prefs: prefs,
       foreground: foreground,
       viewed: ref.read(viewedChatProvider),
+      call: ref.read(callChatProvider),
       petOnScreen: ref.read(petOnScreenProvider),
     );
     // The pet hears every alert (it moves for the one on screen too); it

@@ -3743,6 +3743,12 @@ class L10nZh extends L10n {
   String get diagnosticsForAiFailed => '写不进去：本机运行时还没装好';
 
   @override
+  String get catalogScreenShare => '屏幕共享';
+
+  @override
+  String get catalogScreenShareSummary => '截取当前屏幕画面，逐次授权';
+
+  @override
   String get chatBackgroundTaskNotice => '后台任务通知';
 
   @override
@@ -20425,6 +20431,86 @@ class L10nZh extends L10n {
 
   @override
   String get speechInsecure => '这个云端服务的地址不是 https，Key 不能这样发出去';
+
+  @override
+  String get speechCallScreen => '共享屏幕';
+
+  @override
+  String get speechCallScreenStop => '停止共享';
+
+  @override
+  String get speechCallScreenDeclined => '没有同意共享屏幕';
+
+  @override
+  String get speechCallScreenFailed => '这台手机开不了屏幕共享';
+
+  @override
+  String get speechCallScreenStopped => '屏幕共享被系统停止了';
+
+  @override
+  String get speechCallCamera => '摄像头';
+
+  @override
+  String get speechCallCameraStop => '关摄像头';
+
+  @override
+  String get speechCallCameraDeclined => '没有相机权限';
+
+  @override
+  String get speechCallCameraFailed => '相机打不开';
+
+  @override
+  String get speechCallCameraStopped => '摄像头停了';
+
+  @override
+  String get speechCallCameraSwitch => '切换前后摄像头';
+
+  @override
+  String speechCallWatching(String condition) {
+    return '正在盯：$condition';
+  }
+
+  @override
+  String speechCallWatchMet(String condition) {
+    return '你让我盯的「$condition」出现了';
+  }
+
+  @override
+  String speechCallWatchExpired(String condition) {
+    return '盯了一阵还没等到「$condition」，先不盯了';
+  }
+
+  @override
+  String speechCallVisionTimeUp(int minutes) {
+    return '已经共享 $minutes 分钟了，先帮你停了';
+  }
+
+  @override
+  String get speechCallVisionDown => '看图模型连不上，先不盯了';
+
+  @override
+  String get speechCallReturn => '回到通话';
+
+  @override
+  String get speechVisionTitle => '看图模型';
+
+  @override
+  String get speechVisionHint => '通话里让她盯屏幕或摄像头时，用它看图判断。填 OpenAI 兼容接口（如 DeepSeek V4 Flash）。';
+
+  @override
+  String get speechVisionBaseUrl => '接口地址';
+
+  @override
+  String get speechVisionModel => '模型名';
+
+  @override
+  String get speechVisionKey => 'API Key';
+
+  @override
+  String get speechVisionCompanion => '陪看时主动提醒';
+
+  @override
+  String get speechVisionCompanionHint => '共享时看到报错、弹窗、完成等变化，她会主动说一句（会多用看图模型）';
 
   @override
   String starPromptTitle(int hours) {

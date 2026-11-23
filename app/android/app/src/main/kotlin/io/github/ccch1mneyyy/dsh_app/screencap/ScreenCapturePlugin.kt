@@ -12,7 +12,9 @@ import android.media.projection.MediaProjection
 import android.media.projection.MediaProjectionManager
 import android.os.Handler
 import android.os.HandlerThread
-import android.util.Base64
+import android.os.Looper
+import android.util.DisplayMetrics
+import android.view.WindowManager
 import io.flutter.embedding.engine.plugins.FlutterPlugin
 import io.flutter.embedding.engine.plugins.activity.ActivityAware
 import io.flutter.embedding.engine.plugins.activity.ActivityPluginBinding
@@ -20,20 +22,20 @@ import io.flutter.plugin.common.EventChannel
 import io.flutter.plugin.common.MethodCall
 import io.flutter.plugin.common.MethodChannel
 import io.flutter.plugin.common.PluginRegistry
-import java.io.ByteArrayOutputStream
 
 /**
- * 屏幕共享: MediaProjection based capture.
+ * 屏幕共享: MediaProjection capture for a voice call (and the standalone 屏幕共享 page).
  *
- * Two modes:
- *  - captureOnce: one PNG frame, for the standalone 屏幕共享 page's one-shot preview.
- *  - startSharing(intervalMs) / stopSharing: continuous. A VirtualDisplay mirrors the
- *    screen to an ImageReader; a timer every [intervalMs] takes the newest frame,
- *    encodes it as JPEG and streams it as base64 over `dsh/screencap/frames`.
+ * Doubao streams ~6 fps video to a cloud VLM that decides on its own when to speak. Here the
+ * model is asked per request, so frames are thinned at the source instead:
+ *  - a tick every [intervalMs] takes the newest image (a VirtualDisplay produces none while the
+ *    screen is still, so "no image" already means "unchanged");
+ *  - [FrameGate] compares a 64×36 luma grid with the last frame sent and only lets a visibly
+ *    changed frame through, plus a heartbeat so the Dart side always has a recent one;
+ *  - a frame goes to Dart as `{ts, jpeg, change, width, height, source}` (raw bytes, no base64).
  *
- * The projection token is kept while granted. Android 14+ requires a fresh consent
- * per token (reusing a consumed token throws SecurityException), so we start it once
- * after onActivityResult and keep the VirtualDisplay alive.
+ * The projection token is single-use (Android 14+): one consent per sharing session, released on
+ * [stopSharing]. Rotation is followed by resizing the VirtualDisplay to the new real size.
  */
 class ScreenCapturePlugin : FlutterPlugin, ActivityAware, MethodChannel.MethodCallHandler,
     EventChannel.StreamHandler, PluginRegistry.ActivityResultListener {
@@ -44,22 +46,20 @@ class ScreenCapturePlugin : FlutterPlugin, ActivityAware, MethodChannel.MethodCa
     private var activityBinding: ActivityPluginBinding? = null
     private var appContext: Context? = null
     private var pendingPermission: MethodChannel.Result? = null
-    private var pendingCapture: MethodChannel.Result? = null
-    private val main = Handler(android.os.Looper.getMainLooper())
+    private val main = Handler(Looper.getMainLooper())
 
     private var projection: MediaProjection? = null
-    private var resultCode: Int = Activity.RESULT_CANCELED
-    private var resultData: Intent? = null
-
     private var handlerThread: HandlerThread? = null
     private var handler: Handler? = null
     private var imageReader: ImageReader? = null
     private var virtualDisplay: VirtualDisplay? = null
+    private var width = 0
+    private var height = 0
 
-    private var sharing = false
-    private var shareService = false
-    private var intervalMs = 3000L
-    private var latestJpeg: ByteArray? = null
+    @Volatile private var sharing = false
+    private var intervalMs = 1000L
+    private var maxDim = MAX_FRAME_DIM
+    private val gate = FrameGate()
 
     override fun onAttachedToEngine(binding: FlutterPlugin.FlutterPluginBinding) {
         appContext = binding.applicationContext
@@ -70,8 +70,8 @@ class ScreenCapturePlugin : FlutterPlugin, ActivityAware, MethodChannel.MethodCa
     override fun onDetachedFromEngine(binding: FlutterPlugin.FlutterPluginBinding) {
         methods?.setMethodCallHandler(null); methods = null
         events?.setStreamHandler(null); events = null
-        appContext = null
         stopSharing()
+        appContext = null
     }
 
     override fun onAttachedToActivity(binding: ActivityPluginBinding) {
@@ -87,29 +87,29 @@ class ScreenCapturePlugin : FlutterPlugin, ActivityAware, MethodChannel.MethodCa
     override fun onDetachedFromActivityForConfigChanges() = onDetachedFromActivity()
     override fun onReattachedToActivityForConfigChanges(binding: ActivityPluginBinding) = onAttachedToActivity(binding)
 
-    // ---- EventChannel ----
     override fun onListen(arguments: Any?, events: EventChannel.EventSink?) { sink = events }
     override fun onCancel(arguments: Any?) { sink = null }
 
     override fun onMethodCall(call: MethodCall, result: MethodChannel.Result) {
         when (call.method) {
-            "hasPermission" -> result.success(projection != null)
-            "requestPermission" -> requestPermission(result)
-            "captureOnce" -> captureOnce(result)
+            "isSharing" -> result.success(sharing)
             "startSharing" -> {
-                intervalMs = ((call.argument<Int>("intervalMs") ?: 3000).toLong()).coerceIn(500L, 60000L)
+                intervalMs = ((call.argument<Int>("intervalMs") ?: 1000).toLong()).coerceIn(250L, 10000L)
+                maxDim = (call.argument<Int>("maxDim") ?: MAX_FRAME_DIM).coerceIn(480, 2048)
                 startSharing(result)
             }
             "stopSharing" -> { stopSharing(); result.success(null) }
-            "release" -> { stopSharing(); result.success(null) }
             else -> result.notImplemented()
         }
     }
 
-    private fun requestPermission(result: MethodChannel.Result) {
+    // ---- Consent ----
+
+    private fun startSharing(result: MethodChannel.Result) {
+        if (sharing) { result.success(true); return }
         val activity = activityBinding?.activity
         if (activity == null) { result.error("no_activity", "屏幕共享需要在应用界面内发起", null); return }
-        if (projection != null) { result.success(true); return }
+        if (pendingPermission != null) { result.error("busy", "正在等待屏幕共享授权", null); return }
         val mgr = activity.getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
         pendingPermission = result
         activity.startActivityForResult(mgr.createScreenCaptureIntent(), REQ_PROJECTION)
@@ -117,237 +117,172 @@ class ScreenCapturePlugin : FlutterPlugin, ActivityAware, MethodChannel.MethodCa
 
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?): Boolean {
         if (requestCode != REQ_PROJECTION) return false
-        val pending = pendingPermission
+        val pending = pendingPermission ?: return true
         pendingPermission = null
-        if (resultCode == Activity.RESULT_OK && data != null) {
-            this.resultCode = resultCode
-            this.resultData = data
-            pending?.success(ensureProjection() != null)
-        } else {
-            pending?.success(false)
+        val context = appContext
+        if (resultCode != Activity.RESULT_OK || data == null || context == null) {
+            pending.success(false)
+            return true
         }
-        return true
-    }
-
-    private fun ensureProjection(): MediaProjection? {
-        if (projection != null) return projection
-        val context = appContext ?: return null
-        val data = resultData ?: return null
+        // The mediaProjection foreground service comes first: from targetSdk 34 on,
+        // getMediaProjection() throws without it, and it keeps capture alive in the background.
+        runCatching { ScreenShareService.start(context) }
         val mgr = context.getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
-        val p = mgr.getMediaProjection(resultCode, data) ?: return null
+        val p = runCatching { mgr.getMediaProjection(resultCode, data) }.getOrNull()
+        if (p == null) {
+            ScreenShareService.stop(context)
+            pending.error("projection_failed", "无法开始屏幕共享", null)
+            return true
+        }
         p.registerCallback(object : MediaProjection.Callback() {
             override fun onStop() {
-                // Tell Dart the stream ended (lock screen, system revoke) so the
-                // UI stops claiming it is still sharing.
-                main.post { sink?.error("projection_stopped", "屏幕共享已被系统停止", null) }
+                if (!sharing) return
                 stopSharing()
+                // Lock screen, the system's "stop sharing" chip, another app taking over.
+                sink?.error("projection_stopped", "屏幕共享已被系统停止", null)
             }
         }, main)
         projection = p
-        return p
+        if (!beginCapture(context, p)) {
+            stopSharing()
+            pending.error("display_failed", "无法创建屏幕采集", null)
+            return true
+        }
+        pending.success(true)
+        return true
     }
 
-    // ---- Continuous sharing ----
+    // ---- Capture ----
 
-    private fun startSharing(result: MethodChannel.Result) {
-        val context = appContext
-        val activity = activityBinding?.activity
-        if (context == null || activity == null) { result.error("no_activity", "截屏需要在应用界面内发起", null); return }
-        val proj = ensureProjection()
-        if (proj == null) { result.error("no_permission", "尚未授予屏幕共享权限，请先 requestPermission", null); return }
-        if (sharing) { result.success(null); return }
+    private fun realSize(context: Context): Triple<Int, Int, Int> {
+        val wm = context.getSystemService(Context.WINDOW_SERVICE) as WindowManager
+        val metrics = DisplayMetrics()
+        @Suppress("DEPRECATION")
+        wm.defaultDisplay.getRealMetrics(metrics)
+        return Triple(metrics.widthPixels, metrics.heightPixels, metrics.densityDpi)
+    }
 
-        val metrics = context.resources.displayMetrics
-        val width = metrics.widthPixels
-        val height = metrics.heightPixels
-        val density = metrics.densityDpi
-
-        startThreadIfNeeded()
-        val threadHandler = handler!!
-
-        imageReader?.close()
-        val reader = ImageReader.newInstance(width, height, PixelFormat.RGBA_8888, 3)
+    private fun beginCapture(context: Context, p: MediaProjection): Boolean {
+        val (w, h, dpi) = realSize(context)
+        val t = HandlerThread("dsh-screencap").also { it.start() }
+        handlerThread = t
+        val threadHandler = Handler(t.looper)
+        handler = threadHandler
+        val reader = ImageReader.newInstance(w, h, PixelFormat.RGBA_8888, 2)
         imageReader = reader
-
-        try {
-            virtualDisplay = proj.createVirtualDisplay(
-                "dsh-screencap", width, height, density,
+        width = w; height = h
+        virtualDisplay = runCatching {
+            p.createVirtualDisplay(
+                "dsh-screencap", w, h, dpi,
                 DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
                 reader.surface, null, threadHandler,
             )
-        } catch (e: SecurityException) {
-            stopSharing()
-            result.error("need_reconsent", "屏幕共享令牌失效，需要重新授权", null)
-            return
-        } catch (e: Exception) {
-            stopSharing()
-            result.error("display_failed", e.message, null)
-            return
-        }
-
+        }.getOrNull() ?: return false
         sharing = true
-        latestJpeg = null
-        // Ongoing status-bar notification + foreground priority (mediaProjection type).
-        runCatching {
-            ScreenShareService.start(context)
-            shareService = true
-        }
-        threadHandler.post(frameTick)
-        result.success(null)
+        gate.reset()
+        threadHandler.post(tick)
+        return true
     }
 
-    private val frameTick = object : Runnable {
+    /** The screen turned: the display follows the new real size with a fresh reader. */
+    private fun followRotation() {
+        val context = appContext ?: return
+        val (w, h, dpi) = realSize(context)
+        if (w == width && h == height) return
+        val display = virtualDisplay ?: return
+        val reader = ImageReader.newInstance(w, h, PixelFormat.RGBA_8888, 2)
+        display.resize(w, h, dpi)
+        display.surface = reader.surface
+        imageReader?.close()
+        imageReader = reader
+        width = w; height = h
+        gate.reset()
+    }
+
+    private val tick = object : Runnable {
         override fun run() {
             if (!sharing) return
+            runCatching { followRotation() }
             val reader = imageReader
-            if (reader != null) {
-                val img = try { reader.acquireLatestImage() } catch (_: Exception) { null }
-                if (img != null) {
-                    try {
-                        latestJpeg = toJpeg(img, reader.width, reader.height)
-                    } catch (_: Exception) {
-                    } finally {
-                        img.close()
+            val img = if (reader == null) null else runCatching { reader.acquireLatestImage() }.getOrNull()
+            if (img != null) {
+                var bmp: Bitmap? = null
+                try {
+                    val full = FrameBitmaps.fromImage(img, reader!!.width, reader.height)
+                    bmp = full
+                    val now = System.currentTimeMillis()
+                    val change = gate.offer(full, now)
+                    if (change != null) {
+                        val scaled = FrameBitmaps.downscale(full, maxDim)
+                        val jpeg = FrameBitmaps.jpeg(scaled, JPEG_QUALITY)
+                        val frame = mapOf(
+                            "ts" to now, "jpeg" to jpeg, "change" to change,
+                            "width" to scaled.width, "height" to scaled.height, "source" to "screen",
+                        )
+                        if (scaled !== full) scaled.recycle()
+                        main.post { if (sharing) sink?.success(frame) }
                     }
+                } catch (_: Exception) {
+                } finally {
+                    bmp?.recycle()
+                    img.close()
                 }
-            }
-            val bytes = latestJpeg
-            if (bytes != null) {
-                val b64 = Base64.encodeToString(bytes, Base64.NO_WRAP)
-                main.post { sink?.success(b64) }
+            } else {
+                gate.idle(System.currentTimeMillis())?.let { beat -> main.post { if (sharing) sink?.success(beat) } }
             }
             handler?.postDelayed(this, intervalMs)
         }
     }
 
-    private fun toJpeg(image: android.media.Image, width: Int, height: Int): ByteArray {
-        val plane = image.planes[0]
-        val rowStride = plane.rowStride
-        val pixelStride = plane.pixelStride
-        val paddedWidth = rowStride / pixelStride
-        val bmp = Bitmap.createBitmap(paddedWidth, height, Bitmap.Config.ARGB_8888)
-        bmp.copyPixelsFromBuffer(plane.buffer)
-        val cropped = if (paddedWidth != width) Bitmap.createBitmap(bmp, 0, 0, width, height) else bmp
-        // Keep frames small: a phone screenshot at 2K+ is far more pixels than a
-        // vision model needs, and an oversized image is rejected by the engine.
-        val scaled = downscale(cropped, MAX_FRAME_DIM)
-        val out = ByteArrayOutputStream()
-        scaled.compress(Bitmap.CompressFormat.JPEG, 55, out)
-        if (scaled !== cropped) scaled.recycle()
-        if (cropped !== bmp) cropped.recycle()
-        bmp.recycle()
-        return out.toByteArray()
-    }
-
-    /** Scale [src] down so its longer side is at most [maxDim]; [src] itself when small enough. */
-    private fun downscale(src: Bitmap, maxDim: Int): Bitmap {
-        val longer = maxOf(src.width, src.height)
-        if (longer <= maxDim) return src
-        val ratio = maxDim.toFloat() / longer
-        val w = (src.width * ratio).toInt().coerceAtLeast(1)
-        val h = (src.height * ratio).toInt().coerceAtLeast(1)
-        return Bitmap.createScaledBitmap(src, w, h, true)
-    }
-
-    // ---- One-shot PNG ----
-
-    private fun captureOnce(result: MethodChannel.Result) {
-        val context = appContext
-        if (context == null) { result.error("no_activity", "截屏需要在应用界面内发起", null); return }
-        val proj = ensureProjection()
-        if (proj == null) { result.error("no_permission", "尚未授予屏幕共享权限，请先 requestPermission", null); return }
-        if (pendingCapture != null) { result.error("busy", "上一次截屏尚未完成", null); return }
-        pendingCapture = result
-
-        val metrics = context.resources.displayMetrics
-        val width = metrics.widthPixels
-        val height = metrics.heightPixels
-
-        startThreadIfNeeded()
-        val threadHandler = handler!!
-        imageReader?.close()
-        val reader = ImageReader.newInstance(width, height, PixelFormat.RGBA_8888, 2)
-        imageReader = reader
-        reader.setOnImageAvailableListener({ r ->
-            val image = r.acquireLatestImage() ?: return@setOnImageAvailableListener
-            try {
-                val png = toPng(image, width, height)
-                val b64 = Base64.encodeToString(png, Base64.NO_WRAP)
-                deliverCapture(b64)
-            } catch (e: Exception) {
-                failCapture("capture_failed", e.message)
-            } finally {
-                image.close()
-            }
-        }, threadHandler)
-
-        try {
-            if (virtualDisplay == null) {
-                virtualDisplay = proj.createVirtualDisplay(
-                    "dsh-screencap", width, height, metrics.densityDpi,
-                    DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
-                    reader.surface, null, threadHandler,
-                )
-            } else {
-                virtualDisplay?.surface = reader.surface
-            }
-        } catch (e: SecurityException) {
-            stopSharing()
-            failCapture("need_reconsent", "屏幕共享令牌已失效，需要重新授权")
-        } catch (e: Exception) {
-            failCapture("display_failed", e.message)
-        }
-    }
-
-    private fun toPng(image: android.media.Image, width: Int, height: Int): ByteArray {
-        val plane = image.planes[0]
-        val paddedWidth = plane.rowStride / plane.pixelStride
-        val bmp = Bitmap.createBitmap(paddedWidth, height, Bitmap.Config.ARGB_8888)
-        bmp.copyPixelsFromBuffer(plane.buffer)
-        val cropped = if (paddedWidth != width) Bitmap.createBitmap(bmp, 0, 0, width, height) else bmp
-        val out = ByteArrayOutputStream()
-        cropped.compress(Bitmap.CompressFormat.PNG, 100, out)
-        if (cropped !== bmp) cropped.recycle()
-        bmp.recycle()
-        return out.toByteArray()
-    }
-
-    private fun deliverCapture(base64: String) {
-        val r = pendingCapture ?: return
-        pendingCapture = null
-        main.post { r.success(base64) }
-    }
-
-    private fun failCapture(code: String, msg: String?) {
-        val r = pendingCapture ?: return
-        pendingCapture = null
-        main.post { r.error(code, msg, null) }
-    }
-
-    private fun startThreadIfNeeded() {
-        if (handlerThread != null) return
-        val t = HandlerThread("dsh-screencap").also { it.start() }
-        handlerThread = t
-        handler = Handler(t.looper)
-    }
-
     private fun stopSharing() {
+        val wasSharing = sharing || projection != null
         sharing = false
-        if (shareService) {
-            appContext?.let { runCatching { ScreenShareService.stop(it) } }
-            shareService = false
-        }
         handler?.removeCallbacksAndMessages(null)
         runCatching { virtualDisplay?.release() }; virtualDisplay = null
         runCatching { imageReader?.close() }; imageReader = null
-        runCatching { projection?.stop() }; projection = null
-        latestJpeg = null
+        val p = projection; projection = null
+        runCatching { p?.stop() }
         val t = handlerThread; handlerThread = null; handler = null
         runCatching { t?.quitSafely() }
+        if (wasSharing) appContext?.let { ScreenShareService.stop(it) }
     }
 
     companion object {
         private const val REQ_PROJECTION = 0x5c01
         private const val MAX_FRAME_DIM = 1024
+        private const val JPEG_QUALITY = 60
+    }
+}
+
+/**
+ * Lets a frame through when it visibly differs from the last one sent (mean luma difference on a
+ * 64×36 grid), or as a heartbeat. Returns the change (0..1) for a frame to send, else null.
+ * The same measure as the companion's screen trigger (phone/a11y/CompanionScreenChange.kt).
+ */
+internal class FrameGate(
+    private val threshold: Double = 0.03,
+    private val heartbeatMs: Long = 8000,
+) {
+    private var previous: ByteArray? = null
+    private var sentAt = Long.MIN_VALUE
+
+    fun reset() { previous = null; sentAt = Long.MIN_VALUE }
+
+    fun offer(bitmap: Bitmap, now: Long): Double? {
+        val grid = FrameBitmaps.grid(bitmap)
+        val old = previous
+        val change = if (old == null) 1.0 else FrameBitmaps.difference(old, grid)
+        val beat = sentAt == Long.MIN_VALUE || now - sentAt >= heartbeatMs
+        if (change < threshold && !beat) return null
+        previous = grid
+        sentAt = now
+        return change
+    }
+
+    /** No new image (a still screen): a heartbeat marker only; Dart keeps its last frame. */
+    fun idle(now: Long): Map<String, Any>? {
+        if (sentAt == Long.MIN_VALUE || now - sentAt < heartbeatMs) return null
+        sentAt = now
+        return mapOf("ts" to now, "still" to true, "source" to "screen")
     }
 }

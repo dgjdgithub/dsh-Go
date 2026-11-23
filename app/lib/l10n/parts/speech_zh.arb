@@ -134,5 +134,57 @@
   "speechCallVisualRing": "光环",
   "speechCallVisualMono": "细线",
   "speechCallVisualGlass": "光球",
-  "speechInsecure": "这个云端服务的地址不是 https，Key 不能这样发出去"
+  "speechInsecure": "这个云端服务的地址不是 https，Key 不能这样发出去",
+  "speechCallScreen": "共享屏幕",
+  "speechCallScreenStop": "停止共享",
+  "speechCallScreenDeclined": "没有同意共享屏幕",
+  "speechCallScreenFailed": "这台手机开不了屏幕共享",
+  "speechCallScreenStopped": "屏幕共享被系统停止了",
+  "speechCallCamera": "摄像头",
+  "speechCallCameraStop": "关摄像头",
+  "speechCallCameraDeclined": "没有相机权限",
+  "speechCallCameraFailed": "相机打不开",
+  "speechCallCameraStopped": "摄像头停了",
+  "speechCallCameraSwitch": "切换前后摄像头",
+  "speechCallWatching": "正在盯：{condition}",
+  "@speechCallWatching": {
+    "placeholders": {
+      "condition": {
+        "type": "String"
+      }
+    }
+  },
+  "speechCallWatchMet": "你让我盯的「{condition}」出现了",
+  "@speechCallWatchMet": {
+    "placeholders": {
+      "condition": {
+        "type": "String"
+      }
+    }
+  },
+  "speechCallWatchExpired": "盯了一阵还没等到「{condition}」，先不盯了",
+  "@speechCallWatchExpired": {
+    "placeholders": {
+      "condition": {
+        "type": "String"
+      }
+    }
+  },
+  "speechCallVisionTimeUp": "已经共享 {minutes} 分钟了，先帮你停了",
+  "@speechCallVisionTimeUp": {
+    "placeholders": {
+      "minutes": {
+        "type": "int"
+      }
+    }
+  },
+  "speechCallVisionDown": "看图模型连不上，先不盯了",
+  "speechCallReturn": "回到通话",
+  "speechVisionTitle": "看图模型",
+  "speechVisionHint": "通话里让她盯屏幕或摄像头时，用它看图判断。填 OpenAI 兼容接口（如 DeepSeek V4 Flash）。",
+  "speechVisionBaseUrl": "接口地址",
+  "speechVisionModel": "模型名",
+  "speechVisionKey": "API Key",
+  "speechVisionCompanion": "陪看时主动提醒",
+  "speechVisionCompanionHint": "共享时看到报错、弹窗、完成等变化，她会主动说一句（会多用看图模型）"
 }

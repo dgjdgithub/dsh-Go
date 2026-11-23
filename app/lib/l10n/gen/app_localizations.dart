@@ -6944,6 +6944,18 @@ abstract class L10n {
   /// **'写不进去：本机运行时还没装好'**
   String get diagnosticsForAiFailed;
 
+  /// No description provided for @catalogScreenShare.
+  ///
+  /// In zh, this message translates to:
+  /// **'屏幕共享'**
+  String get catalogScreenShare;
+
+  /// No description provided for @catalogScreenShareSummary.
+  ///
+  /// In zh, this message translates to:
+  /// **'截取当前屏幕画面，逐次授权'**
+  String get catalogScreenShareSummary;
+
   /// No description provided for @chatBackgroundTaskNotice.
   ///
   /// In zh, this message translates to:
@@ -37583,6 +37595,150 @@ abstract class L10n {
   /// In zh, this message translates to:
   /// **'这个云端服务的地址不是 https，Key 不能这样发出去'**
   String get speechInsecure;
+
+  /// No description provided for @speechCallScreen.
+  ///
+  /// In zh, this message translates to:
+  /// **'共享屏幕'**
+  String get speechCallScreen;
+
+  /// No description provided for @speechCallScreenStop.
+  ///
+  /// In zh, this message translates to:
+  /// **'停止共享'**
+  String get speechCallScreenStop;
+
+  /// No description provided for @speechCallScreenDeclined.
+  ///
+  /// In zh, this message translates to:
+  /// **'没有同意共享屏幕'**
+  String get speechCallScreenDeclined;
+
+  /// No description provided for @speechCallScreenFailed.
+  ///
+  /// In zh, this message translates to:
+  /// **'这台手机开不了屏幕共享'**
+  String get speechCallScreenFailed;
+
+  /// No description provided for @speechCallScreenStopped.
+  ///
+  /// In zh, this message translates to:
+  /// **'屏幕共享被系统停止了'**
+  String get speechCallScreenStopped;
+
+  /// No description provided for @speechCallCamera.
+  ///
+  /// In zh, this message translates to:
+  /// **'摄像头'**
+  String get speechCallCamera;
+
+  /// No description provided for @speechCallCameraStop.
+  ///
+  /// In zh, this message translates to:
+  /// **'关摄像头'**
+  String get speechCallCameraStop;
+
+  /// No description provided for @speechCallCameraDeclined.
+  ///
+  /// In zh, this message translates to:
+  /// **'没有相机权限'**
+  String get speechCallCameraDeclined;
+
+  /// No description provided for @speechCallCameraFailed.
+  ///
+  /// In zh, this message translates to:
+  /// **'相机打不开'**
+  String get speechCallCameraFailed;
+
+  /// No description provided for @speechCallCameraStopped.
+  ///
+  /// In zh, this message translates to:
+  /// **'摄像头停了'**
+  String get speechCallCameraStopped;
+
+  /// No description provided for @speechCallCameraSwitch.
+  ///
+  /// In zh, this message translates to:
+  /// **'切换前后摄像头'**
+  String get speechCallCameraSwitch;
+
+  /// No description provided for @speechCallWatching.
+  ///
+  /// In zh, this message translates to:
+  /// **'正在盯：{condition}'**
+  String speechCallWatching(String condition);
+
+  /// No description provided for @speechCallWatchMet.
+  ///
+  /// In zh, this message translates to:
+  /// **'你让我盯的「{condition}」出现了'**
+  String speechCallWatchMet(String condition);
+
+  /// No description provided for @speechCallWatchExpired.
+  ///
+  /// In zh, this message translates to:
+  /// **'盯了一阵还没等到「{condition}」，先不盯了'**
+  String speechCallWatchExpired(String condition);
+
+  /// No description provided for @speechCallVisionTimeUp.
+  ///
+  /// In zh, this message translates to:
+  /// **'已经共享 {minutes} 分钟了，先帮你停了'**
+  String speechCallVisionTimeUp(int minutes);
+
+  /// No description provided for @speechCallVisionDown.
+  ///
+  /// In zh, this message translates to:
+  /// **'看图模型连不上，先不盯了'**
+  String get speechCallVisionDown;
+
+  /// No description provided for @speechCallReturn.
+  ///
+  /// In zh, this message translates to:
+  /// **'回到通话'**
+  String get speechCallReturn;
+
+  /// No description provided for @speechVisionTitle.
+  ///
+  /// In zh, this message translates to:
+  /// **'看图模型'**
+  String get speechVisionTitle;
+
+  /// No description provided for @speechVisionHint.
+  ///
+  /// In zh, this message translates to:
+  /// **'通话里让她盯屏幕或摄像头时，用它看图判断。填 OpenAI 兼容接口（如 DeepSeek V4 Flash）。'**
+  String get speechVisionHint;
+
+  /// No description provided for @speechVisionBaseUrl.
+  ///
+  /// In zh, this message translates to:
+  /// **'接口地址'**
+  String get speechVisionBaseUrl;
+
+  /// No description provided for @speechVisionModel.
+  ///
+  /// In zh, this message translates to:
+  /// **'模型名'**
+  String get speechVisionModel;
+
+  /// No description provided for @speechVisionKey.
+  ///
+  /// In zh, this message translates to:
+  /// **'API Key'**
+  String get speechVisionKey;
+
+  /// No description provided for @speechVisionCompanion.
+  ///
+  /// In zh, this message translates to:
+  /// **'陪看时主动提醒'**
+  String get speechVisionCompanion;
+
+  /// No description provided for @speechVisionCompanionHint.
+  ///
+  /// In zh, this message translates to:
+  /// **'共享时看到报错、弹窗、完成等变化，她会主动说一句（会多用看图模型）'**
+  String get speechVisionCompanionHint;
 
   /// The star prompt's first line. hours is the whole hours of use so far, rounded down; 0 is half an hour (the first ask comes after 30 minutes). The word joiner keeps the ~ on the line of the word before it.
   ///

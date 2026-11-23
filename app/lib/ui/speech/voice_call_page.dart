@@ -10,46 +10,29 @@
 import 'dart:async';
 import 'dart:io';
 import 'dart:math' as math;
-import 'dart:typed_data';
 import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-import '../../companion/companion_voice.dart';
-import '../../companion/companion_voice_source.dart';
 import '../../l10n/l10n.dart';
 import '../../media/screen_capture.dart';
-import '../../media/screen_frame_store.dart';
 import '../../performance/performance_state.dart';
 import '../../state/android_features.dart' show operatingSystemProvider;
 import '../../speech/call/chat_call.dart';
-import '../../speech/call/thinking_cue.dart';
 import '../../speech/call/voice_call.dart';
-import '../../speech/deepseek_speech.dart';
 import '../../speech/read_aloud.dart';
-import '../../speech/speech_audio.dart';
 import '../../speech/speech_out.dart';
 import '../../speech/speech_settings.dart';
-import '../../speech/voice_cloud.dart';
 import '../../state/account_state.dart';
-import '../../state/app_notes.dart';
-import '../../state/notify_state.dart';
-import '../../state/voice_settings.dart';
-import '../../state/voice_state.dart';
-import '../chat/voice/voice_bridge.dart';
 import '../companion/companion_ask.dart';
 import '../companion/companion_stage.dart';
 import '../fx/voice_ring/voice_ring.dart';
 import '../theme/app_icons.dart';
 import '../theme/theme.dart';
-import '../../state/streaming_asr_state.dart';
-import '../../state/streaming_pcm_state.dart';
-import '../../usage/usage_stats.dart';
-import '../../voice/live_words.dart';
-import '../../voice/live_words_model.dart';
-import '../../voice/streaming_pcm.dart';
+import '../../speech/call/call_vision.dart';
+import 'call/active_call.dart';
 import 'call/call_backdrop.dart';
 import 'call/call_parts.dart';
 import 'call/call_transcript.dart';
@@ -57,21 +40,35 @@ import 'call/call_visuals.dart';
 import 'speech_ui.dart';
 
 /// Opens a call with the main chat's conversation. [session] gives its id,
-/// creating it for a new chat; [title] heads the page.
+/// creating it for a new chat; [title] heads the page. A call already under
+/// way is brought back instead (one call at a time).
 Future<void> openChatCall(
   BuildContext context, {
   required String title,
   required Future<String?> Function() session,
 }) async {
   final container = ProviderScope.containerOf(context, listen: false);
+  final running = container.read(activeCallProvider);
+  if (running != null && !running.ended) return showActiveCall(context, running);
   container.read(readAloudProvider.notifier).stop();
-  await Navigator.of(context).push(
+  final call = ActiveCall(container, title: title, conversation: ChatCallConversation(container, session));
+  container.read(activeCallProvider.notifier).set(call);
+  unawaited(call.start());
+  await showActiveCall(context, call);
+}
+
+/// The call's page over whatever is open (from the return pill, a
+/// notification, or a new call). Leaving it leaves the call going.
+Future<void> showActiveCall(BuildContext context, ActiveCall call) async {
+  if (call.onScreen || call.ended) return;
+  await Navigator.of(context, rootNavigator: true).push(
     PageRouteBuilder<void>(
       opaque: true,
       fullscreenDialog: true,
+      settings: const RouteSettings(name: voiceCallRouteName),
       transitionDuration: AppMotion.of(context, const Duration(milliseconds: 520)),
       reverseTransitionDuration: AppMotion.of(context, AppMotion.collapse),
-      pageBuilder: (_, _, _) => VoiceCallPage(title: title, conversation: ChatCallConversation(container, session)),
+      pageBuilder: (_, _, _) => VoiceCallPage(title: call.title, call: call),
       transitionsBuilder: (_, animation, _, child) {
         final curve = CurvedAnimation(parent: animation, curve: AppMotion.enter, reverseCurve: AppMotion.exit);
         // Opening: the page rises out of the dark.
@@ -82,32 +79,40 @@ Future<void> openChatCall(
       },
     ),
   );
-  // Off the call: its conversation is no longer the one being heard (ChatCallConversation set it).
-  container.read(callChatProvider.notifier).set(null);
 }
 
+/// The call page's route name.
+const voiceCallRouteName = 'voice-call';
+
 class VoiceCallPage extends ConsumerStatefulWidget {
-  const VoiceCallPage({super.key, required this.title, required this.conversation});
+  /// A view of [call], or (with [conversation]) a call of the page's own,
+  /// hung up when the page goes.
+  const VoiceCallPage({super.key, required this.title, this.conversation, this.call})
+    : assert((conversation == null) != (call == null));
 
   final String title;
-  final CallConversation conversation;
+  final CallConversation? conversation;
+  final ActiveCall? call;
 
   @override
   ConsumerState<VoiceCallPage> createState() => _VoiceCallPageState();
 }
 
 class _VoiceCallPageState extends ConsumerState<VoiceCallPage> with WidgetsBindingObserver, TickerProviderStateMixin {
-  late final VoiceCallController _call;
+  late final ActiveCall _active;
+
+  /// The page made [_active] (no global call): it ends with the page.
+  late final bool _owned;
+  VoiceCallController get _call => _active.controller;
+  int _noticeSeen = 0;
   final _scene = CallScene();
   late final AnimationController _enter = AnimationController(
     vsync: this,
     duration: const Duration(milliseconds: 1100),
   );
   Timer? _leave;
-  DateTime? _since;
+  DateTime? get _since => _active.since;
   CallPhase _shown = CallPhase.starting;
-  void Function(UsageOutcome, {UsageOperation? actual})? _callConnect;
-  void Function(UsageOutcome, {UsageOperation? actual})? _callSession;
 
   // Her, when she is the backdrop.
   final _stage = CompanionStageController();
@@ -121,11 +126,8 @@ class _VoiceCallPageState extends ConsumerState<VoiceCallPage> with WidgetsBindi
   /// A finger on the light: it gives a little.
   bool _pressed = false;
 
-  /// 屏幕共享: the projection token is held while sharing; each tap of the key
-  /// asks once (the system sheet lets the person pick the whole screen or one
-  /// window) and streams frames every few seconds until turned off.
-  bool _sharing = false;
-  StreamSubscription<Uint8List>? _shareSub;
+  /// 共享屏幕 / 摄像头 being turned on (the system sheet may be up).
+  bool _visionBusy = false;
 
   /// The system asks for less motion (read each build): the light holds still
   /// and the page comes in without its staggered rise.
@@ -143,10 +145,13 @@ class _VoiceCallPageState extends ConsumerState<VoiceCallPage> with WidgetsBindi
     _call.error,
     _call.turns.isEmpty,
     _call.ended == CallEnd.noRecognizer && ref.read(accountProvider).signedIn,
-    switch (widget.conversation) {
-      final ChatCallConversation chat => chat.sessionId,
-      _ => null,
-    },
+    _active.sessionId,
+    _active.vision.source,
+    _active.vision.frontCamera,
+    _active.vision.watch,
+    _active.vision.preview,
+    _active.since,
+    _visionBusy,
   );
 
   /// [_shows] as of the last build.
@@ -156,138 +161,27 @@ class _VoiceCallPageState extends ConsumerState<VoiceCallPage> with WidgetsBindi
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
-    final callSettings = ref.read(callSettingsProvider.notifier);
-    final voices = ref.read(speechVoiceSettingsProvider.notifier);
-    // The chosen voice, as soon as the settings have been read (the first reply comes later).
-    _voice = ref.read(speechVoiceSettingsProvider) ?? voices.defaults;
-    final speaker = ref.read(speechSpeakerProvider);
-    final audio = ref.read(speechAudioProvider);
-    final deepseek = ref.read(deepSeekSpeechProvider);
-    final bridge = ref.read(voiceBridgeProvider);
-    _call = VoiceCallController(
-      audio: audio,
-      conversation: widget.conversation,
-      recognizer: () async {
-        // The phone's own voice warms up while the call starts, not when changed mid-reply.
-        await _settleVoice(warm: _call.phase == CallPhase.starting);
-        if (!mounted) return null;
-        return ref.read(callRecognizerProvider)();
-      },
-      voice: () => speechOutFor(
-        _voice,
-        deepseek: deepseek,
-        audio: audio,
-        speaker: speaker,
-        call: true,
-        levels: true,
-        gap: ref.read(deepSeekSpeechGapProvider),
-      ),
-      // The saved ones, not the defaults shown while they load (a first call after launch).
-      choices: () async {
-        final saved = await callSettings.ready();
-        return (
-          bargeIn: saved.bargeIn,
-          speaker: saved.speaker,
-          spokenHint: saved.spoken ? appNote(appL10n.speechCallHint) : null,
-          pause: saved.pause,
-        );
-      },
-      permission: () async => await bridge.requestPermission() == VoicePermission.granted,
-      cutNote: (heard) => appNote(heard.isEmpty ? appL10n.speechCallCutEarly : appL10n.speechCallCutNote(heard)),
-      thinkingCue: () async {
-        // Asked again after the settings: her voice may have begun meanwhile.
-        if ((await callSettings.ready()).cue && _call.cueStill) await playThinkingCue(audio);
-      },
-    )..addListener(_changed);
-    // Changed in 通话设置 (or anywhere) during the call: from the next sentence on.
-    ref.listenManual(speechVoiceSettingsProvider, (_, _) => unawaited(_settleVoice()));
-    ref.listenManual(voiceSettingsProvider, (_, _) => unawaited(_call.refreshRecognizer()));
-    ref.listenManual(cloudAsrProvider, (_, _) => unawaited(_call.refreshRecognizer()));
-    ref.listenManual(callSettingsProvider.select((s) => s.pause), (_, pause) => _call.setPause(pause));
+    final given = widget.call;
+    _owned = given == null;
+    _active = given ?? ActiveCall(ProviderScope.containerOf(context, listen: false), title: widget.title, conversation: widget.conversation!);
+    _noticeSeen = _active.notice?.$1 ?? 0;
+    _shown = _call.phase;
+    _active
+      ..attachView()
+      ..addListener(_changed);
     HapticFeedback.mediumImpact();
     _enter.forward();
-    unawaited(_start());
-  }
-
-  /// Live captions, once the call listens, when the streaming model is on the phone.
-  LiveWords? _live;
-
-  /// Her voice for the next reply.
-  late CompanionVoiceSettings _voice;
-
-  /// [_voice] from the settings: DeepSeek's with nobody to pay for it here
-  /// becomes the phone's own; the phone's own warms up.
-  Future<void> _settleVoice({bool warm = false}) async {
-    final mine = ++_settling;
-    var next = await ref.read(speechVoiceSettingsProvider.notifier).ready();
-    if (!mounted) return;
-    if (next.source == CompanionVoiceSource.deepseek) {
-      final speech = await ref.read(deepSeekSpeechProvider)();
-      if (speech == null) {
-        next = next.copyWith(source: CompanionVoiceSource.system);
-      } else {
-        speech.close();
-      }
-    }
-    // A later choice has the last word, whichever answer comes back first.
-    if (!mounted || mine != _settling) return;
-    // Setting the speaker up would cut a reply it is reading: that only as the
-    // call starts; a change later only starts the phone's engine, and takes
-    // effect with the next reply.
-    if (next.source != CompanionVoiceSource.deepseek) {
-      final speaker = ref.read(speechSpeakerProvider);
-      unawaited(warm ? speaker.ready(next) : speaker.warmPhone());
-    }
-    _voice = next;
-  }
-
-  int _settling = 0;
-
-  Future<void> _start() async {
-    final pcm = ref.read(streamingPcmCaptureProvider);
-    final asr = ref.read(streamingAsrProvider);
-    final found = liveWordsModel(ref);
-    _callConnect = ref.read(usageStatsProvider.notifier).beginOperation(UsageOperation.callConnect);
-    await _call.start();
-    try {
-      final chosen = await found;
-      if (chosen == null || !mounted || _call.phase == CallPhase.ended) return;
-      final live = _live = LiveWords(
-        pcm,
-        asr,
-        chosen.model,
-        StreamingPcmSource.call,
-        _call.live,
-        trial: chosen.trial,
-        // Captions that stop mid-call leave the call itself going.
-        onFailure: (_) => _live = null,
-      );
-      await live.start();
-    } on Object {
-      // Without live captions the call goes on as before.
-      _live = null;
-    }
+    if (_owned) unawaited(_active.start());
+    // Came back to a call that ended meanwhile: the page goes again.
+    if (_call.phase == CallPhase.ended) WidgetsBinding.instance.addPostFrameCallback((_) => _changed());
   }
 
   void _changed() {
     if (!mounted) return;
     final phase = _call.phase;
-    // Listening only proves the microphone opened. A received assistant
-    // reply proves the call's conversation path actually worked.
-    if (_callConnect != null && phase == CallPhase.speaking) {
-      _callConnect?.call(UsageOutcome.ready);
-      _callConnect = null;
-      _callSession = ref.read(usageStatsProvider.notifier).beginOperation(UsageOperation.callSession);
-    }
-    if (phase == CallPhase.ended) {
-      final why = _call.ended;
-      _callConnect?.call(switch (why) {
-        CallEnd.permission || CallEnd.microphone || CallEnd.noRecognizer || CallEnd.failed => UsageOutcome.failed,
-        _ => UsageOutcome.unknown,
-      });
-      _callConnect = null;
-      _callSession?.call(why == CallEnd.failed ? UsageOutcome.failed : UsageOutcome.ready);
-      _callSession = null;
+    if (_active.notice case (final serial, final text) when serial != _noticeSeen) {
+      _noticeSeen = serial;
+      ScaffoldMessenger.maybeOf(context)?.showSnackBar(SnackBar(content: Text(text)));
     }
     if (phase != _shown) {
       _arrived(phase);
@@ -315,11 +209,8 @@ class _VoiceCallPageState extends ConsumerState<VoiceCallPage> with WidgetsBindi
   /// A new phase: a touch under the finger, and her mood when she is there.
   void _arrived(CallPhase phase) {
     switch (phase) {
-      case CallPhase.listening when _since == null:
-        _since = DateTime.now();
+      case CallPhase.listening when _shown == CallPhase.starting:
         HapticFeedback.lightImpact();
-        // Anonymous usage statistics: a call got through (the microphone is on).
-        ref.read(usageStatsProvider.notifier).count(UsageCount.call);
       case CallPhase.hearing:
         HapticFeedback.selectionClick();
       case CallPhase.speaking:
@@ -374,69 +265,61 @@ class _VoiceCallPageState extends ConsumerState<VoiceCallPage> with WidgetsBindi
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
-    _shareSub?.cancel();
-    final conversation = widget.conversation;
-    if (conversation is ChatCallConversation) {
-      conversation.clearScreenFrames();
-    }
-    unawaited(ScreenCapture.stopSharing());
-    unawaited(_live?.stop());
     _leave?.cancel();
     _enter.dispose();
-    _callConnect?.call(UsageOutcome.unknown);
-    _callSession?.call(UsageOutcome.unknown);
-    _call
-      ..removeListener(_changed)
-      ..dispose();
+    _active.removeListener(_changed);
+    if (_owned) {
+      _active.dispose();
+    } else {
+      _active.detachView();
+    }
     _scene.dispose();
     super.dispose();
   }
 
   void _hangUp() {
     HapticFeedback.heavyImpact();
-    final conversation = widget.conversation;
-    if (conversation is ChatCallConversation) unawaited(conversation.sendLastScreenFrame());
-    _call.hangUp();
+    _active.hangUp();
   }
 
-  /// 共享屏幕: toggle continuous capture. Turning on asks the system once
-  /// (the person picks the whole screen or one window) and then streams frames;
-  /// turning off stops it.
-  Future<void> _toggleScreenShare() async {
+  void _say(String text) => ScaffoldMessenger.maybeOf(context)?.showSnackBar(SnackBar(content: Text(text)));
+
+  /// 共享屏幕: on asks the system (whole screen or one window); off stops it.
+  /// The camera goes off first: one picture at a time.
+  Future<void> _toggleScreen() async {
     HapticFeedback.selectionClick();
-    if (_sharing) {
-      _shareSub?.cancel();
-      _shareSub = null;
-      await ScreenCapture.stopSharing();
-      final conversation = widget.conversation;
-      if (conversation is ChatCallConversation) conversation.clearScreenFrames();
-      if (mounted) setState(() => _sharing = false);
-      return;
+    final vision = _active.vision;
+    if (vision.source == VisionSource.screen) return vision.stop();
+    setState(() => _visionBusy = true);
+    final result = await vision.startScreen();
+    if (!mounted) return;
+    setState(() => _visionBusy = false);
+    switch (result) {
+      case CallVisionStart.started:
+        break;
+      case CallVisionStart.declined:
+        _say(context.l10n.speechCallScreenDeclined);
+      case CallVisionStart.unsupported || CallVisionStart.failed:
+        _say(context.l10n.speechCallScreenFailed);
     }
-    try {
-      final started = await ScreenCapture.startSharing(intervalMs: 1000);
-      if (!mounted) return;
-      if (started) {
-        final conversation = widget.conversation;
-        _shareSub = ScreenCapture.frames().listen((bytes) {
-          // 每秒一帧：存最新帧；等你说话时随消息带给 AI，不单独发、不打断。
-          unawaited(ScreenFrameStore.write(bytes));
-          if (conversation is ChatCallConversation) conversation.pushScreenFrame(bytes);
-        }, onError: (Object _) {
-          if (!mounted) return;
-          setState(() => _sharing = false);
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('屏幕共享已停止，可重新点共享屏幕')),
-          );
-        });
-      }
-      setState(() => _sharing = started);
-      if (!started) {
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('未授予屏幕共享权限')));
-      }
-    } catch (_) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('此设备不支持屏幕共享')));
+  }
+
+  /// 摄像头: the back camera; the little window turns it round.
+  Future<void> _toggleCamera() async {
+    HapticFeedback.selectionClick();
+    final vision = _active.vision;
+    if (vision.source == VisionSource.camera) return vision.stop();
+    setState(() => _visionBusy = true);
+    final result = await vision.startCamera();
+    if (!mounted) return;
+    setState(() => _visionBusy = false);
+    switch (result) {
+      case CallVisionStart.started:
+        break;
+      case CallVisionStart.declined:
+        _say(context.l10n.speechCallCameraDeclined);
+      case CallVisionStart.unsupported || CallVisionStart.failed:
+        _say(context.l10n.speechCallCameraFailed);
     }
   }
 
@@ -582,10 +465,9 @@ class _VoiceCallPageState extends ConsumerState<VoiceCallPage> with WidgetsBindi
     final her = settings.backdrop == CallBackdrop.companion && !_stageFailed;
     final (status, dots) = _status(l10n);
     final error = _call.error;
-    final sessionId = switch (widget.conversation) {
-      final ChatCallConversation chat => chat.sessionId,
-      _ => null,
-    };
+    final sessionId = _active.sessionId;
+    final vision = _active.vision;
+    final watching = vision.watch;
     final width = MediaQuery.sizeOf(context).width;
     final lightSize = math.min(340.0, width * 0.86);
     final hearing = _call.phase == CallPhase.hearing;
@@ -741,6 +623,18 @@ class _VoiceCallPageState extends ConsumerState<VoiceCallPage> with WidgetsBindi
                           ),
                         ),
                       ),
+                      if (watching != null && !ended)
+                        Padding(
+                          key: const ValueKey('call-watching'),
+                          padding: const EdgeInsets.fromLTRB(28, 10, 28, 0),
+                          child: Text(
+                            l10n.speechCallWatching(watching.condition),
+                            textAlign: TextAlign.center,
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
+                            style: theme.textTheme.bodySmall?.copyWith(color: ink.fg.withValues(alpha: 0.72)),
+                          ),
+                        ),
                       if (sessionId != null)
                         Padding(
                           padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
@@ -767,11 +661,13 @@ class _VoiceCallPageState extends ConsumerState<VoiceCallPage> with WidgetsBindi
                             0.44,
                             CallKey(
                               key: const ValueKey('call-share-screen'),
-                              icon: AppIcons.shareImage,
-                              label: _sharing ? '停止共享' : '共享屏幕',
-                              on: _sharing,
+                              icon: vision.source == VisionSource.screen ? AppIcons.stopSharing : AppIcons.shareImage,
+                              label: vision.source == VisionSource.screen
+                                  ? l10n.speechCallScreenStop
+                                  : l10n.speechCallScreen,
+                              on: vision.source == VisionSource.screen,
                               blur: keyBlur,
-                              onTap: ended ? null : () => unawaited(_toggleScreenShare()),
+                              onTap: ended || _visionBusy ? null : () => unawaited(_toggleScreen()),
                             ),
                             distance: 26,
                           ),
@@ -784,6 +680,20 @@ class _VoiceCallPageState extends ConsumerState<VoiceCallPage> with WidgetsBindi
                               onTap: ended ? null : _hangUp,
                             ),
                             distance: 34,
+                          ),
+                          _rise(
+                            0.52,
+                            CallKey(
+                              key: const ValueKey('call-camera'),
+                              icon: AppIcons.camera,
+                              label: vision.source == VisionSource.camera
+                                  ? l10n.speechCallCameraStop
+                                  : l10n.speechCallCamera,
+                              on: vision.source == VisionSource.camera,
+                              blur: keyBlur,
+                              onTap: ended || _visionBusy ? null : () => unawaited(_toggleCamera()),
+                            ),
+                            distance: 26,
                           ),
                           _rise(
                             0.56,
@@ -803,6 +713,16 @@ class _VoiceCallPageState extends ConsumerState<VoiceCallPage> with WidgetsBindi
                     ],
                   ),
                 ),
+                if (vision.source == VisionSource.camera && !ended)
+                  Positioned(
+                    top: MediaQuery.viewPaddingOf(context).top + 72,
+                    right: 16,
+                    child: _CameraWindow(
+                      frame: vision.preview,
+                      onSwitch: () => unawaited(vision.switchCamera()),
+                      switchLabel: l10n.speechCallCameraSwitch,
+                    ),
+                  ),
               ],
             ),
           ),
@@ -972,6 +892,40 @@ class _RoundKeyState extends State<_RoundKey> {
             shape: const CircleBorder(),
             blur: widget.blur,
             child: Icon(widget.icon, size: 18, color: ink.fg.withValues(alpha: onTap == null ? 0.35 : 0.8)),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// The camera's picture in a corner of the call, a tap turning the camera round.
+class _CameraWindow extends StatelessWidget {
+  const _CameraWindow({required this.frame, required this.onSwitch, required this.switchLabel});
+
+  final VisionFrame? frame;
+  final VoidCallback onSwitch;
+  final String switchLabel;
+
+  @override
+  Widget build(BuildContext context) {
+    final jpeg = frame?.jpeg;
+    final ratio = frame == null || frame!.height == 0 ? 3 / 4 : frame!.width / frame!.height;
+    return Semantics(
+      button: true,
+      label: switchLabel,
+      child: GestureDetector(
+        key: const ValueKey('call-camera-window'),
+        onTap: onSwitch,
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(14),
+          child: Container(
+            width: 112,
+            height: 112 / ratio.clamp(0.4, 2.0),
+            color: const Color(0xFF0B1020),
+            child: jpeg == null
+                ? const Center(child: SizedBox.square(dimension: 18, child: CircularProgressIndicator(strokeWidth: 2)))
+                : Image.memory(jpeg, fit: BoxFit.cover, gaplessPlayback: true),
           ),
         ),
       ),

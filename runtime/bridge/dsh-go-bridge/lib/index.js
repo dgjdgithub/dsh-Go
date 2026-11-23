@@ -27,6 +27,7 @@ import { createPluginConfig, pluginConfigUnavailable } from "./plugin-config.js"
 import { injectPromiseWithResolvers } from "./web-promise.js";
 import { createSessionDeletion, sessionDeletionUnavailable } from "./session-deletion.js";
 import { createSpeechRoutes } from "./speech.js";
+import { registerScreenTool } from "./screen-tool.js";
 import { createUsage } from "./usage.js";
 import { createCompanionRoutes } from "./companion/routes.js";
 import { createCompanionPromptContext, FULL_PRESET } from './companion/prompt-context.js';
@@ -283,29 +284,27 @@ export function apply(ctx, config) {
   const native = new NativeCore(ctx, effectiveLimits(options.native), VERSION);
   ctx.effect(() => () => native.dispose(), "dsh-go-bridge: native core");
   ctx.provide("dshGo", native.service);
-  // look_at_screen: the model looks at the phone screen when it decides to.
+  // 通话里的画面: look_at_screen / watch_screen / stop_watching_screen (lib/screen-tool.js).
   ctx.inject(["tools"], (toolCtx) => {
     const dispose = registerScreenTool(toolCtx);
-    ctx.effect(() => dispose, "dsh-go-bridge: look_at_screen");
-    try {
-      const marker = "/sdcard/Android/data/io.github.ccch1mneyyy.dsh_app.screenshare/files/screen/tool-registered.txt";
-      writeFileSync(marker, new Date().toISOString());
-    } catch {}
+    ctx.effect(() => dispose, "dsh-go-bridge: screen tools");
   });
   try {
     const stop = ctx.systemPrompt.section({
       name: "dsh-go-screen",
       order: 610,
       interpolate: false,
-      text: "你的手机屏幕可以通过 look_at_screen 工具查看：它返回最新的一张屏幕截图。"
-        + "它只依赖用户开启的屏幕共享，不需要手机操控/无障碍权限；不要改用手机操控里的 screen 工具。"
-        + "当用户让你看屏幕、问屏幕上的内容、或让你盯着屏幕上的东西时，调用它；"
-        + "需要持续观察时，可以隔几秒重复调用（用 bash 的 sleep 控制间隔）。"
-        + "用户没提到屏幕时不要无故调用。",
+      text: "语音通话里，用户可以共享手机屏幕或打开摄像头给你看。"
+        + "共享时用户每说一句话，消息里会附上那时的画面；想再看一眼当前画面用 look_at_screen。"
+        + "用户让你盯着某个变化（“好了叫我”“出现…告诉我”）时调用 watch_screen，"
+        + "把条件写成一句能直接看图判断的话，之后由手机去盯，满足时会提醒用户，你不需要反复查看。"
+        + "消息里以“盯屏提醒”开头的隐藏说明，是手机已经替你提醒过用户的事。"
+        + "这些工具只依赖通话里的共享，不需要手机操控/无障碍；不要改用手机操控里的 screen 工具。"
+        + "用户没提到画面时不要无故调用。",
     });
     ctx.effect(() => stop, "dsh-go-bridge: screen prompt");
   } catch {
-    // An older engine without a system-prompt service: the tool still exists.
+    // An older engine without a system-prompt service: the tools still exist.
   }
   let companionRecall;
   const companionPrompt = createCompanionPromptContext({

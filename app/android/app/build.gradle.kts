@@ -212,6 +212,9 @@ dependencies {
     // pulls in (bcprov-jdk15to18:1.81); adding jdk18on next to it duplicates every class.
     implementation("org.bouncycastle:bcpkix-jdk15to18:1.81")
     implementation("androidx.webkit:webkit:1.15.0") // Apache-2.0: web islands' force dark (webview_flutter's own version)
+    // Apache-2.0: 通话里开摄像头 (screencap/CameraCapturePlugin.kt); mobile_scanner 7.5.0's own version.
+    implementation("androidx.camera:camera-camera2:1.6.1")
+    implementation("androidx.camera:camera-lifecycle:1.6.1")
 }
 
 if (sideBuild) {

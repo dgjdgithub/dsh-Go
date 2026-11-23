@@ -3,22 +3,35 @@
 // composer does); the reply is every assistant step of the turn that follows,
 // read in order (「我查一下」 before a tool call is said too).
 //
-// 屏幕共享 is tool-driven now: the engine exposes look_at_screen, and the model
-// decides when to look. This class only keeps the last frame so a hang-up can
-// leave the final screen in the conversation.
+// 通话里的画面 (call_vision.dart): while the screen or camera is shared, each
+// message carries the frames from while the person spoke ([frames]); a 盯屏
+// reminder she already said goes in with the next message as a hidden note, so
+// the conversation knows about it. The model's watch_screen /
+// stop_watching_screen calls are seen here and handed to [onTool].
 
 import 'dart:async';
-import 'dart:typed_data';
 
 import 'package:dsh_client/dsh_client.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../media/screen_capture.dart';
 import '../../state/app_notes.dart';
 import '../../state/attachments.dart';
 import '../../state/chat_state.dart';
 import '../../state/hosts_state.dart';
 import '../../state/notify_state.dart';
 import 'voice_call.dart';
+
+/// The engine's tools for the call's picture (runtime/bridge/dsh-go-bridge/lib/screen-tool.js).
+const callVisionTools = {'watch_screen', 'stop_watching_screen'};
+
+/// [name] as one of [callVisionTools] (a namespaced name too), else null.
+String? callVisionTool(String name) {
+  for (final tool in callVisionTools) {
+    if (name == tool || name.endsWith('.$tool') || name.endsWith(':$tool') || name.endsWith('__$tool')) return tool;
+  }
+  return null;
+}
 
 class ChatCallConversation implements CallConversation {
   /// [session] gives the conversation's id, creating it for a new chat.
@@ -31,35 +44,46 @@ class ChatCallConversation implements CallConversation {
   String? _id;
   bool _disposed = false;
 
-  /// 屏幕共享: the most recent captured frames (oldest first). While sharing is
-  /// on every spoken turn carries the newest one, so the AI always sees the
-  /// screen when the person talks; the look_at_screen tool is there for the
-  /// model to look on its own too.
-  final List<Uint8List> _screenFrames = [];
+  /// The frames for the message being sent (none while nothing is shared).
+  List<VisionFrame> Function()? frames;
 
-  void pushScreenFrame(Uint8List frame) {
-    _screenFrames.add(frame);
-    if (_screenFrames.length > 4) _screenFrames.removeAt(0);
+  /// A watch_screen / stop_watching_screen call the model made in this call.
+  void Function(ToolChatItem call)? onTool;
+
+  /// Tool calls already handed to [onTool] (or there before the call).
+  final Set<String> _toolsSeen = {};
+
+  /// Hidden notes for the next message (a 盯屏 reminder she already said).
+  final List<({String note, VisionFrame? frame})> _notes = [];
+
+  /// 盯屏 said [said] in the call: the conversation hears of it with the next message.
+  // l10n:keep-begin model-facing hidden notes
+  void noteVision(String said, {String? condition, VisionFrame? frame}) {
+    final what = condition == null ? '我在画面里看到值得提醒的变化' : '你让我盯的「$condition」出现了';
+    _notes.add((note: appNote('盯屏提醒：$what，已经在通话里对用户说了：「$said」。附图是当时的画面。'), frame: frame));
+    if (_notes.length > 3) _notes.removeAt(0);
   }
 
-  void clearScreenFrames() => _screenFrames.clear();
-
-  /// 挂断前: send the last captured screen frame once, so the conversation
-  /// still has what was on screen when the call ended.
-  Future<void> sendLastScreenFrame() async {
-    if (_screenFrames.isEmpty || _disposed) return;
-    final frame = _screenFrames.last;
+  /// 挂断前: a reminder not yet passed on, with its picture, so the
+  /// conversation still knows what was seen.
+  Future<void> sendPendingNotes() async {
+    if (_notes.isEmpty || _disposed) return;
     final id = _id ?? await _session();
     if (id == null || _disposed) return;
-    _follow(id);
     final state = _container.read(chatProvider(id));
     if (state.running) return;
-    final note = appNote('（语音通话结束前，这是我最后的屏幕画面。像正常打电话一样，简短说重点即可。）');
+    final notes = List.of(_notes);
+    _notes.clear();
     await _container.read(chatProvider(id).notifier).send(
-      note,
-      attachments: [DraftAttachment.sniff('screen-last.jpg', frame)],
+      [...notes.map((n) => n.note), appNote('（语音通话已经结束，简短确认即可。）')].join('\n'),
+      attachments: [
+        for (final (i, n) in notes.indexed)
+          if (n.frame?.jpeg case final jpeg?) DraftAttachment.sniff('vision-note-$i.jpg', jpeg),
+      ],
     );
   }
+
+  // l10n:keep-end
 
   /// The assistant steps already there before the last send.
   Set<String> _before = const {};
@@ -86,6 +110,12 @@ class ChatCallConversation implements CallConversation {
     if (_id == id && _sub != null) return;
     _sub?.close();
     _id = id;
+    _toolsSeen
+      ..clear()
+      ..addAll([
+        for (final item in _container.read(chatProvider(id)).items)
+          if (item is ToolChatItem) item.callId,
+      ]);
     _sub = _container.listen<ChatState>(chatProvider(id), (_, next) => _changed(next));
     // Its replies are heard here: no banner for them while the call is up.
     _container.read(callChatProvider.notifier).set((host: _container.read(activeHostProvider), sessionId: id));
@@ -114,15 +144,32 @@ class ChatCallConversation implements CallConversation {
     if (state.singleQuestion case final request? when state.openApproval == null) {
       ok = await chat.answer(request, [QuestionAnswer(request.questions.single.id, custom: text)]);
     } else {
-      final attachments = _screenAttachmentsFor(text);
-      final body = attachments.isEmpty
-          ? text
-          : '${appNote('（这是语音通话：你正在和我打电话，不是文字聊天。附上的图片是我当前屏幕的画面。不要逐条念出或播报图片里的内容；像正常打电话那样，用简短口语只说重要的、需要提醒我的信息，必要时用一两句描述画面即可。不要用 Markdown、列表或表格。）')}\n$text';
+      // l10n:keep-begin model-facing hidden note
+      final shown = frames?.call() ?? const <VisionFrame>[];
+      final stamp = DateTime.now().millisecondsSinceEpoch;
+      final notes = List.of(_notes);
+      final attachments = [
+        for (final (i, n) in notes.indexed)
+          if (n.frame?.jpeg case final jpeg?) DraftAttachment.sniff('vision-note-$stamp-$i.jpg', jpeg),
+        for (final (i, f) in shown.indexed)
+          if (f.jpeg case final jpeg?) DraftAttachment.sniff('${f.source.name}-$stamp-$i.jpg', jpeg),
+      ];
+      final camera = shown.isNotEmpty && shown.last.source == VisionSource.camera;
+      final lead = [
+        ...notes.map((n) => n.note),
+        if (shown.isNotEmpty)
+          appNote('（语音通话中，我在共享${camera ? '摄像头' : '屏幕'}。最后${shown.length > 1 ? '几张' : '一张'}图是我说这句话时的画面'
+              '${shown.length > 1 ? '，按时间先后排列' : ''}。不要逐条念图里的内容，像打电话一样用简短口语只说要紧的；'
+              '要我等某个变化就用 watch_screen。）'),
+      ];
+      // l10n:keep-end
+      final body = lead.isEmpty ? text : '${lead.join('\n')}\n$text';
       ok = await chat.send(body, attachments: attachments);
       if (!ok && attachments.isNotEmpty) {
-        // The image was refused: the words still go.
-        ok = await chat.send(text);
+        // The images were refused (a text-only model): the words still go.
+        ok = await chat.send(lead.isEmpty ? text : [...notes.map((n) => n.note), text].join('\n'));
       }
+      if (ok) _notes.removeRange(0, notes.length.clamp(0, _notes.length));
     }
     if (!ok) {
       _tracking = false;
@@ -137,27 +184,18 @@ class ChatCallConversation implements CallConversation {
     return true;
   }
 
-  /// While sharing is on, every spoken turn carries the latest frame; a
-  /// change/error question also carries the one before it for comparison.
-  List<DraftAttachment> _screenAttachmentsFor(String text) {
-    if (_screenFrames.isEmpty) return const [];
-    final picked = <Uint8List>[_screenFrames.last];
-    if (_asksWhatChanged(text) && _screenFrames.length >= 2) {
-      picked.add(_screenFrames[_screenFrames.length - 2]);
-    }
-    final stamp = DateTime.now().millisecondsSinceEpoch;
-    return [
-      for (var i = 0; i < picked.length; i++)
-        DraftAttachment.sniff('screen-$stamp-$i.jpg', picked[i]),
-    ];
-  }
-
-  static bool _asksWhatChanged(String text) {
-    const words = ['刚才', '之前', '怎么', '为什么', '变了', '报错', '出错', '错误', '怎么回事'];
-    return words.any(text.contains);
-  }
-
   void _changed(ChatState state) {
+    final tool = onTool;
+    if (tool != null) {
+      for (final item in state.items) {
+        if (item is ToolChatItem &&
+            callVisionTool(item.name) != null &&
+            item.status != ToolStatus.streaming &&
+            _toolsSeen.add(item.callId)) {
+          tool(item);
+        }
+      }
+    }
     if (!_tracking) return;
     if (state.running) _sawRunning = true;
     final steps = [

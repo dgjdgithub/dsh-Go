@@ -24,3 +24,19 @@ Future<({StreamingAsrModel model, NativeTrial? trial})?> liveWordsModel(WidgetRe
   final model = await models.installed();
   return model == null ? null : (model: model, trial: models.trial);
 }
+
+/// [liveWordsModel] for what holds no widget (a call that outlives its page).
+Future<({StreamingAsrModel model, NativeTrial? trial})?> liveWordsModelIn(ProviderContainer container) async {
+  if (container.read(operatingSystemProvider) == 'ohos') {
+    final probe = container.listen(ohosStreamingAsrReadyProvider, (_, _) {});
+    try {
+      final ready = await container.read(ohosStreamingAsrReadyProvider.future);
+      return ready == SystemAsrReadiness.ready ? (model: const StreamingAsrModel.system(), trial: null) : null;
+    } finally {
+      probe.close();
+    }
+  }
+  final models = await container.read(streamingAsrModelStoreProvider.future);
+  final model = await models.installed();
+  return model == null ? null : (model: model, trial: models.trial);
+}

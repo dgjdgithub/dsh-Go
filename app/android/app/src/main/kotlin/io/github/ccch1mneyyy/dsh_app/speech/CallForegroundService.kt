@@ -3,6 +3,7 @@ package io.github.ccch1mneyyy.dsh_app.speech
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
+import android.app.PendingIntent
 import android.app.Service
 import android.content.Context
 import android.content.Intent
@@ -51,10 +52,18 @@ class CallForegroundService : Service() {
         }
         return builder
             .setContentTitle("语音通话进行中")
-            .setContentText("通话在后台继续")
+            .setContentText("通话在后台继续，点此回到通话")
             .setSmallIcon(android.R.drawable.ic_btn_speak_now)
             .setOngoing(true)
+            .setContentIntent(openApp())
             .build()
+    }
+
+    /** Back to the app, where the call (and its return pill) still is. */
+    private fun openApp(): PendingIntent? {
+        val launch = packageManager.getLaunchIntentForPackage(packageName) ?: return null
+        launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+        return PendingIntent.getActivity(this, 0, launch, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
     }
 
     companion object {

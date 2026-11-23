@@ -3940,6 +3940,12 @@ class L10nEn extends L10n {
   String get diagnosticsForAiFailed => 'Not written: the local runtime is not installed';
 
   @override
+  String get catalogScreenShare => 'Screen share';
+
+  @override
+  String get catalogScreenShareSummary => 'Capture the current screen, one tap each time';
+
+  @override
   String get chatBackgroundTaskNotice => 'Background task notice';
 
   @override
@@ -21585,6 +21591,88 @@ class L10nEn extends L10n {
 
   @override
   String get speechInsecure => 'That service\'s address isn\'t https; the key can\'t be sent that way';
+
+  @override
+  String get speechCallScreen => 'Share screen';
+
+  @override
+  String get speechCallScreenStop => 'Stop sharing';
+
+  @override
+  String get speechCallScreenDeclined => 'Screen sharing wasn\'t allowed';
+
+  @override
+  String get speechCallScreenFailed => 'Screen sharing couldn\'t start on this phone';
+
+  @override
+  String get speechCallScreenStopped => 'The system stopped screen sharing';
+
+  @override
+  String get speechCallCamera => 'Camera';
+
+  @override
+  String get speechCallCameraStop => 'Camera off';
+
+  @override
+  String get speechCallCameraDeclined => 'No camera permission';
+
+  @override
+  String get speechCallCameraFailed => 'The camera couldn\'t open';
+
+  @override
+  String get speechCallCameraStopped => 'The camera stopped';
+
+  @override
+  String get speechCallCameraSwitch => 'Switch camera';
+
+  @override
+  String speechCallWatching(String condition) {
+    return 'Watching for: $condition';
+  }
+
+  @override
+  String speechCallWatchMet(String condition) {
+    return 'What you asked me to watch for is here: $condition';
+  }
+
+  @override
+  String speechCallWatchExpired(String condition) {
+    return 'No sign of “$condition” yet; I\'ve stopped watching';
+  }
+
+  @override
+  String speechCallVisionTimeUp(int minutes) {
+    return 'Sharing has run for $minutes minutes; I\'ve stopped it';
+  }
+
+  @override
+  String get speechCallVisionDown => 'The vision model isn\'t answering; I\'ve stopped watching';
+
+  @override
+  String get speechCallReturn => 'Back to the call';
+
+  @override
+  String get speechVisionTitle => 'Vision model';
+
+  @override
+  String get speechVisionHint =>
+      'Judges the picture when a call watches the screen or camera. An OpenAI-compatible endpoint (e.g. DeepSeek V4 Flash).';
+
+  @override
+  String get speechVisionBaseUrl => 'Base URL';
+
+  @override
+  String get speechVisionModel => 'Model';
+
+  @override
+  String get speechVisionKey => 'API key';
+
+  @override
+  String get speechVisionCompanion => 'Speak up while watching along';
+
+  @override
+  String get speechVisionCompanionHint =>
+      'While sharing, she mentions errors, pop-ups or finished tasks on her own (uses the vision model more)';
 
   @override
   String starPromptTitle(int hours) {

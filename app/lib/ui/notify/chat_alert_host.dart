@@ -14,6 +14,8 @@ import '../../state/hosts_state.dart';
 import '../../state/notify_state.dart';
 import '../bots/bot_alerts.dart';
 import '../common/discard_guard.dart';
+import '../speech/call/active_call.dart';
+import '../speech/voice_call_page.dart' show showActiveCall;
 import '../theme/app_icons.dart';
 import '../theme/theme.dart';
 
@@ -85,7 +87,16 @@ class _ChatAlertHostState extends ConsumerState<ChatAlertHost> {
   }
 
   Future<void> _onTap(NotifyTap tap) async {
-    if (!mounted || !await DiscardGuard.confirmLeave(context) || !mounted) return;
+    if (!mounted) return;
+    // The call's own conversation: back to the call (it goes on under whatever is open).
+    final call = ref.read(activeCallProvider);
+    final target = call?.target;
+    if (call != null && !call.ended && target != null && target.host == tap.host && target.sessionId == tap.sessionId) {
+      widget.onReveal?.call(false);
+      await showActiveCall(context, call);
+      return;
+    }
+    if (!await DiscardGuard.confirmLeave(context) || !mounted) return;
     widget.onReveal?.call(false);
     // A Bot or group chat notification opens that chat.
     if (openDsBotTap(context, tap)) return;

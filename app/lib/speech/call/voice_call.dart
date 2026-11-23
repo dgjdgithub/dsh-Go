@@ -195,6 +195,16 @@ class VoiceCallController extends ChangeNotifier {
   /// The call so far, oldest first.
   List<CallTurn> get turns => List.unmodifiable(_turns);
 
+  DateTime? _spokeFrom;
+  DateTime? _spokeTo;
+
+  /// When the person's last words began and ended (通话里的画面 picks the
+  /// frames from then for the message they become).
+  ({DateTime? from, DateTime? to}) get spokenSpan => (from: _spokeFrom, to: _spokeTo);
+
+  /// Said by [announce] while she was busy: said once she listens again.
+  final _announcements = <String>[];
+
   CallPhase get phase => _phase;
   CallEnd? get ended => _ended;
   bool get muted => _muted;
@@ -326,6 +336,8 @@ class VoiceCallController extends ChangeNotifier {
         notifyListeners();
       case SpeechStart(:final over):
         _live = '';
+        _spokeFrom = DateTime.now();
+        _spokeTo = null;
         final out = _out;
         if ((over || _phase == CallPhase.speaking) && out != null) {
           _over = true;
@@ -349,6 +361,7 @@ class VoiceCallController extends ChangeNotifier {
         _set(CallPhase.hearing);
       case Utterance(:final wav, :final duration):
         unawaited(const DiagnosticsChannel().recordVoiceStage('utterance_ready'));
+        _spokeTo = DateTime.now();
         // Finished before [confirmAfter]: the words decide.
         _overTimer?.cancel();
         // The live words stand in until the recognizer's come back.
@@ -631,14 +644,26 @@ class VoiceCallController extends ChangeNotifier {
 
   void hangUp() => _end(CallEnd.hungUp);
 
-  /// 盯屏: say a short sentence now, outside a turn — used when a watched thing
-  /// on the screen disappears, so the person hears it in the call.
+  /// 盯屏: she says a short sentence outside a turn (a watched thing on the
+  /// screen or camera happened). While a turn is under way, or the person is
+  /// talking, it waits until she listens again.
   void announce(String text) {
-    if (_phase == CallPhase.ended || text.trim().isEmpty) return;
-    final out = _out ??= _newVoice();
-    out.add(text);
+    final line = text.trim();
+    if (_phase == CallPhase.ended || line.isEmpty) return;
+    if (_phase != CallPhase.listening || _out != null || !_replyDone) {
+      _announcements.add(line);
+      return;
+    }
+    _say(line);
+  }
+
+  void _say(String line) {
+    _turns.add(CallTurn('', her: line));
+    _reply = line;
+    final out = _out = _newVoice();
+    out.add(line);
     out.finish();
-    if (_phase != CallPhase.speaking) _set(CallPhase.speaking);
+    _set(CallPhase.speaking);
   }
 
   /// The app went to the background: Android gives a backgrounded app no
@@ -670,6 +695,14 @@ class VoiceCallController extends ChangeNotifier {
     }
     _phase = phase;
     if (!_disposed) notifyListeners();
+    if (phase == CallPhase.listening && _announcements.isNotEmpty && _out == null && _replyDone) {
+      // After this frame: the listener that set listening finishes first.
+      scheduleMicrotask(() {
+        if (_phase == CallPhase.listening && _out == null && _announcements.isNotEmpty) {
+          _say(_announcements.removeAt(0));
+        }
+      });
+    }
   }
 
   @override

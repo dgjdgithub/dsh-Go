@@ -1,57 +1,88 @@
 import 'dart:async';
-import 'dart:convert';
-import 'dart:typed_data';
 
 import 'package:flutter/services.dart';
 
+/// Where a call's picture comes from.
+enum VisionSource { screen, camera }
+
+/// One frame from `screencap/ScreenCapturePlugin.kt` or `CameraCapturePlugin.kt`.
+///
+/// [jpeg] is null for a heartbeat of a still screen (nothing new to send; the
+/// last frame still stands). [keep] is false for the camera's small preview
+/// frames, which only feed the call page's little window.
+class VisionFrame {
+  const VisionFrame({
+    required this.at,
+    required this.source,
+    this.jpeg,
+    this.change = 0,
+    this.keep = true,
+    this.width = 0,
+    this.height = 0,
+  });
+
+  final DateTime at;
+  final VisionSource source;
+  final Uint8List? jpeg;
+
+  /// How much it differs from the last kept frame, 0..1 (1 for the first).
+  final double change;
+  final bool keep;
+  final int width;
+  final int height;
+
+  bool get still => jpeg == null;
+
+  static VisionFrame? fromEvent(Object? event) {
+    if (event is! Map) return null;
+    final ts = event['ts'];
+    final at = DateTime.fromMillisecondsSinceEpoch(ts is int ? ts : DateTime.now().millisecondsSinceEpoch);
+    final source = event['source'] == 'camera' ? VisionSource.camera : VisionSource.screen;
+    final jpeg = event['jpeg'];
+    final change = event['change'];
+    return VisionFrame(
+      at: at,
+      source: source,
+      jpeg: jpeg is Uint8List ? jpeg : null,
+      change: change is num ? change.toDouble() : 0,
+      keep: event['keep'] != false,
+      width: event['width'] is int ? event['width'] as int : 0,
+      height: event['height'] is int ? event['height'] as int : 0,
+    );
+  }
+}
+
 /// 屏幕共享: the Dart side of `screencap/ScreenCapturePlugin.kt`.
 ///
-/// [requestPermission] shows the system's screen-capture consent sheet (the
-/// person picks the whole screen or one window there). After that:
-///  - [startSharing]/[frames] stream the newest screen frame as PNG/JPEG bytes at
-///    a chosen interval (default 3 s), for continuous sharing.
-///  - [captureOnce] grabs a single PNG frame.
+/// [startSharing] shows the system's consent sheet (the person picks the whole
+/// screen or one window there) and then streams [frames]: a frame when the
+/// screen visibly changed, a heartbeat otherwise. The native side starts the
+/// mediaProjection foreground service, so capture goes on in the background.
 class ScreenCapture {
   ScreenCapture._();
 
   static const _channel = MethodChannel('dsh/screencap');
   static const _frames = EventChannel('dsh/screencap/frames');
 
-  /// Whether a projection token is already granted (no dialog needed).
-  static Future<bool> hasPermission() async {
+  static Stream<VisionFrame>? _stream;
+
+  /// Frames while sharing. Errors with `projection_stopped` when the system ends it.
+  static Stream<VisionFrame> frames() =>
+      _stream ??= _frames.receiveBroadcastStream().map(VisionFrame.fromEvent).where((f) => f != null).cast<VisionFrame>();
+
+  static Future<bool> isSharing() async {
     try {
-      return await _channel.invokeMethod<bool>('hasPermission') ?? false;
+      return await _channel.invokeMethod<bool>('isSharing') ?? false;
     } on MissingPluginException {
       return false;
     }
   }
 
-  /// Show the system consent dialog. Returns true when the user granted it.
-  static Future<bool> requestPermission() async {
-    return await _channel.invokeMethod<bool>('requestPermission') ?? false;
+  /// Asks for consent and starts. False when the person declined.
+  static Future<bool> startSharing({int intervalMs = 1000, int maxDim = 1024}) async {
+    return await _channel.invokeMethod<bool>('startSharing', {'intervalMs': intervalMs, 'maxDim': maxDim}) ?? false;
   }
 
-  /// Continuous screen frames (base64 JPEG strings) at [intervalMs].
-  /// Call [startSharing] first, then listen here.
-  static Stream<Uint8List> frames() {
-    return _frames.receiveBroadcastStream().map((event) {
-      final b64 = event as String;
-      return base64Decode(b64);
-    });
-  }
-
-  /// Begin continuous capture at [intervalMs] (default 3 s). Asks for
-  /// permission first if none is held yet. Returns true when sharing started.
-  static Future<bool> startSharing({int intervalMs = 3000, bool ensurePermission = true}) async {
-    if (ensurePermission && !await hasPermission()) {
-      final granted = await requestPermission();
-      if (!granted) return false;
-    }
-    await _channel.invokeMethod<void>('startSharing', {'intervalMs': intervalMs});
-    return true;
-  }
-
-  /// Stop continuous capture.
   static Future<void> stopSharing() async {
     try {
       await _channel.invokeMethod<void>('stopSharing');
@@ -59,24 +90,42 @@ class ScreenCapture {
       // Nothing to stop.
     }
   }
+}
 
-  /// Grab the current screen once as PNG bytes.
-  static Future<Uint8List?> captureOnce({bool ensurePermission = true}) async {
-    if (ensurePermission && !await hasPermission()) {
-      final granted = await requestPermission();
-      if (!granted) return null;
+/// 通话里开摄像头: the Dart side of `screencap/CameraCapturePlugin.kt`. The
+/// camera follows the app: it pauses in the background and comes back with it.
+class CameraCapture {
+  CameraCapture._();
+
+  static const _channel = MethodChannel('dsh/camcap');
+  static const _frames = EventChannel('dsh/camcap/frames');
+
+  static Stream<VisionFrame>? _stream;
+
+  static Stream<VisionFrame> frames() =>
+      _stream ??= _frames.receiveBroadcastStream().map(VisionFrame.fromEvent).where((f) => f != null).cast<VisionFrame>();
+
+  static Future<bool> requestPermission() async {
+    try {
+      return await _channel.invokeMethod<bool>('requestPermission') ?? false;
+    } on MissingPluginException {
+      return false;
     }
-    final b64 = await _channel.invokeMethod<String>('captureOnce');
-    if (b64 == null || b64.isEmpty) return null;
-    return base64Decode(b64);
   }
 
-  /// Drop any projection token held natively.
-  static Future<void> release() async {
+  /// Starts the back camera (or the front one), a kept frame every [sampleMs].
+  static Future<bool> start({bool front = false, int sampleMs = 1000}) async {
+    return await _channel.invokeMethod<bool>('start', {'front': front, 'sampleMs': sampleMs}) ?? false;
+  }
+
+  /// Turns to the other camera; returns whether the front one is on now.
+  static Future<bool> switchCamera() async => await _channel.invokeMethod<bool>('switchCamera') ?? false;
+
+  static Future<void> stop() async {
     try {
-      await _channel.invokeMethod<void>('release');
+      await _channel.invokeMethod<void>('stop');
     } on MissingPluginException {
-      // Nothing to release.
+      // Nothing to stop.
     }
   }
 }

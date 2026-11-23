@@ -6,6 +6,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../companion/companion_voice_source.dart';
 import '../../l10n/l10n.dart';
 import '../../speech/speech_audio.dart';
+import '../../speech/call/vision_settings.dart';
 import '../../speech/speech_settings.dart';
 import '../../state/android_features.dart';
 import '../../state/streaming_asr_model_state.dart';
@@ -254,6 +255,7 @@ class _VoiceSettingsPageState extends ConsumerState<VoiceSettingsPage> {
             ),
           ],
         ),
+        const _VisionForm(),
       ],
     );
   }
@@ -357,6 +359,114 @@ class _CloudAsrFormState extends ConsumerState<_CloudAsrForm> {
               child: field(_model, 'FunAudioLLM/SenseVoiceSmall'),
             ),
           ],
+        ),
+      ],
+    );
+  }
+}
+
+/// 看图模型 for a call's 盯屏 and 陪看 (OpenAI-compatible, takes images): saved as typed.
+class _VisionForm extends ConsumerStatefulWidget {
+  const _VisionForm();
+
+  @override
+  ConsumerState<_VisionForm> createState() => _VisionFormState();
+}
+
+class _VisionFormState extends ConsumerState<_VisionForm> {
+  final _base = TextEditingController();
+  final _key = TextEditingController();
+  final _model = TextEditingController();
+  late final VisionSettingsController _store = ref.read(visionSettingsProvider.notifier);
+  Timer? _save;
+  bool _filled = false;
+  bool _obscure = true;
+
+  @override
+  void initState() {
+    super.initState();
+    unawaited(() async {
+      final s = await _store.ready();
+      final key = await _store.apiKey();
+      if (!mounted) return;
+      _base.text = s.baseUrl;
+      _model.text = s.model;
+      _key.text = key ?? '';
+      setState(() => _filled = true);
+    }());
+  }
+
+  Future<void> _persist() async {
+    final base = _base.text.trim();
+    final model = _model.text.trim();
+    final key = _key.text.trim();
+    await _store.edit((saved) => saved.copyWith(baseUrl: base, model: model));
+    await _store.setApiKey(key);
+  }
+
+  @override
+  void dispose() {
+    final pending = _save?.isActive ?? false;
+    _save?.cancel();
+    if (pending) {
+      final store = _persist();
+      unawaited(store);
+    }
+    _base.dispose();
+    _key.dispose();
+    _model.dispose();
+    super.dispose();
+  }
+
+  void _edited() {
+    if (!_filled) return;
+    _save?.cancel();
+    _save = Timer(const Duration(milliseconds: 400), () => unawaited(_persist()));
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final l10n = context.l10n;
+    final vision = ref.watch(visionSettingsProvider);
+    Widget field(TextEditingController c, String hint, {bool secret = false, bool url = false}) => TextField(
+      controller: c,
+      enabled: _filled,
+      onChanged: (_) => _edited(),
+      obscureText: secret && _obscure,
+      obscuringCharacter: '•',
+      autocorrect: false,
+      enableSuggestions: !secret,
+      enableIMEPersonalizedLearning: !secret,
+      keyboardType: secret ? TextInputType.visiblePassword : (url ? TextInputType.url : TextInputType.text),
+      decoration: InputDecoration(
+        hintText: hint,
+        suffixIcon: secret
+            ? IconButton(
+                tooltip: _obscure ? l10n.engineFieldShow : l10n.commonHide,
+                icon: Icon(_obscure ? AppIcons.showSecret : AppIcons.hideSecret, size: 20),
+                onPressed: () => setState(() => _obscure = !_obscure),
+              )
+            : null,
+      ),
+    );
+    return SettingsSection(
+      key: const ValueKey('speech-vision-form'),
+      title: l10n.speechVisionTitle,
+      footer: Text(l10n.speechVisionHint),
+      children: [
+        FormFieldGroup(
+          children: [
+            FormFieldBlock(label: l10n.speechVisionBaseUrl, child: field(_base, 'https://api.deepseek.com/v1', url: true)),
+            FormFieldBlock(label: l10n.speechVisionKey, child: field(_key, 'sk-…', secret: true)),
+            FormFieldBlock(label: l10n.speechVisionModel, child: field(_model, 'deepseek-v4-flash')),
+          ],
+        ),
+        SettingsSwitchTile(
+          key: const ValueKey('speech-vision-companion'),
+          title: l10n.speechVisionCompanion,
+          subtitle: l10n.speechVisionCompanionHint,
+          value: vision.companion,
+          onChanged: (on) => unawaited(_store.edit((saved) => saved.copyWith(companion: on))),
         ),
       ],
     );

@@ -149,7 +149,7 @@ if ((side)); then
 else
   unset DSH_SIDE_BUILD
 fi
-echo "dsh-go $name ($code, $when) · $mode · ${flavors[*]}$( ((beta)) && echo ' · beta channel')$( ((side)) && echo ' · side (dsh_app.test)')$( ((star_on)) && echo ' · star prompt')"
+echo "dsh-go $name ($code, $when) · $mode · ${flavors[*]}$( ((beta)) && echo ' · beta channel')$( ((side)) && echo " · side (dsh_app${DSH_SIDE_SUFFIX:-.test})")$( ((star_on)) && echo ' · star prompt')"
 if ((dry)); then
   for c in "${commands[@]}"; do echo "(cd app && ${c% })"; done
   ((keep_daemon)) || echo "(cd app/android && ./gradlew --stop)"

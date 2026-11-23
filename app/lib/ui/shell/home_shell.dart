@@ -41,6 +41,7 @@ import '../session/session_detail_page.dart';
 import '../settings/search/settings_search_page.dart';
 import '../settings/settings_screen.dart';
 import '../share_code/share_code_host.dart';
+import '../speech/call/call_return_host.dart';
 import '../tavern/tavern_intake.dart';
 import '../star/star_prompt_host.dart';
 import '../theme/theme.dart';
@@ -348,6 +349,8 @@ class _HomeShellState extends ConsumerState<HomeShell> with TickerProviderStateM
                     children: [
                       // Notifications: routes taps, raises the in-app banner (draws nothing here).
                       ChatAlertHost(onReveal: _revealChat),
+                      // A call going on with its page closed: the pill back to it (draws nothing here).
+                      const CallReturnHost(),
                       // Background running cut off by the phone, or on HarmonyOS suspended with the app:
                       // one line under the header (draws nothing here).
                       if (ref.watch(androidSystemFeaturesProvider))
