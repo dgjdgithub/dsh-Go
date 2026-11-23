@@ -171,7 +171,7 @@ class ChatCallConversation implements CallConversation {
       final attachments = _screenAttachmentsFor(text);
       final body = attachments.isEmpty
           ? text
-          : '${appNote('（这是语音通话。附上了我屏幕的最新画面。请像平时说话一样简短、口语化地回答，不要念图片内容、不要用 Markdown、列表或表格。）')}\n$text';
+          : '${appNote('（这是语音通话：你正在和我打电话，不是文字聊天。附上的图片是我当前屏幕的画面。不要逐条念出或播报图片里的内容；像正常打电话那样，用简短口语只说重要的、需要提醒我的信息，必要时用一两句描述画面即可。不要用 Markdown、列表或表格。）')}\n$text';
       ok = await chat.send(body, attachments: attachments);
       if (!ok && attachments.isNotEmpty) {
         // The image was refused (a text-only model, or an invalid frame): the
