@@ -160,7 +160,7 @@ class ChatCallConversation implements CallConversation {
     _tracking = true;
     _sawRunning = state.running;
     _last = '';
-    final bool ok;
+    bool ok;
     if (state.singleQuestion case final request? when state.openApproval == null) {
       ok = await chat.answer(request, [QuestionAnswer(request.questions.single.id, custom: text)]);
     } else {
