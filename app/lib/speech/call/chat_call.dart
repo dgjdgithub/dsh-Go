@@ -2,6 +2,10 @@
 // as a message, as if typed (an open question takes it as its answer, like the
 // composer does); the reply is every assistant step of the turn that follows,
 // read in order (「我查一下」 before a tool call is said too).
+//
+// 屏幕共享 is tool-driven now: the engine exposes look_at_screen, and the model
+// decides when to look. This class only keeps the last frame so a hang-up can
+// leave the final screen in the conversation.
 
 import 'dart:async';
 import 'dart:typed_data';
@@ -27,93 +31,18 @@ class ChatCallConversation implements CallConversation {
   String? _id;
   bool _disposed = false;
 
-  /// 屏幕共享: the most recent captured frames (oldest first). Frames are pushed
-  /// about once a second while sharing is on; they are never sent on their own.
-  /// When the person says something that refers to the screen, the newest frame
-  /// (and, for a change/error question, the one before it) rides along with that
-  /// message, so the AI sees the screen as of the question.
-  final List<Uint8List> _screenFrames = [];
+  /// 屏幕共享: the newest captured frame, kept only for the hang-up snapshot.
+  Uint8List? _lastFrame;
 
-  /// Feed one captured frame; keeps the last few for a before/after comparison.
-  void pushScreenFrame(Uint8List frame) {
-    _screenFrames.add(frame);
-    if (_screenFrames.length > 4) _screenFrames.removeAt(0);
-  }
+  void pushScreenFrame(Uint8List frame) => _lastFrame = frame;
 
-  /// Drop the buffered frames when sharing stops.
-  void clearScreenFrames() => _screenFrames.clear();
-
-  /// 盯屏: set by a spoken request like「帮我盯着…，没了告诉我」. While on, the
-  /// page pushes a frame every few seconds and [watchTick] asks the AI whether
-  /// the thing is still there; the answer is silent unless it is gone.
-  bool _watching = false;
-  String _watchInstruction = '';
-  bool _watchBusy = false;
-
-  bool get watching => _watching;
-
-  void stopWatching() {
-    _watching = false;
-    _watchInstruction = '';
-  }
-
-  static bool _isWatchRequest(String text) {
-    if (text.contains('盯')) return true;
-    const ends = ['通知', '告诉', '提醒', '没了', '不见', '消失'];
-    return text.contains('看') && ends.any(text.contains);
-  }
-
-  static bool _isStopWatch(String text) {
-    const words = ['别盯', '不盯', '停止盯', '停止监控', '不用盯', '别监控', '取消监控'];
-    return words.any(text.contains);
-  }
-
-  /// One silent watch check. Returns the AI's answer text (e.g. 还在 / 不在了),
-  /// or null when it could not check now (a turn is running, or no reply yet).
-  Future<String?> watchTick(Uint8List frame) async {
-    if (!_watching || _watchBusy || _disposed) return null;
-    final id = _id ?? await _session();
-    if (id == null || _disposed) return null;
-    _follow(id);
-    var state = _container.read(chatProvider(id));
-    if (state.running) return null;
-    _watchBusy = true;
-    try {
-      final before = {
-        for (final item in state.items)
-          if (item is AssistantChatItem) item.key,
-      };
-      final note = appNote(
-        '（屏幕监控检查，不要朗读这条，也不要在聊天里显示。）看这张截图。我之前让你盯的是：$_watchInstruction。'
-        '如果它已经不在了，只回答“不在了”；否则只回答“还在”。不要解释。',
-      );
-      final ok = await _container.read(chatProvider(id).notifier).send(
-        note,
-        attachments: [DraftAttachment.sniff('watch.jpg', frame)],
-      );
-      if (!ok) return null;
-      for (var i = 0; i < 30; i++) {
-        await Future.delayed(const Duration(milliseconds: 500));
-        if (_disposed) return null;
-        final s = _container.read(chatProvider(id));
-        final steps = [
-          for (final item in s.items)
-            if (item is AssistantChatItem && !before.contains(item.key)) item.text.trim(),
-        ];
-        final text = steps.join('\n').trim();
-        if (text.isNotEmpty && !s.running) return text;
-      }
-      return null;
-    } finally {
-      _watchBusy = false;
-    }
-  }
+  void clearScreenFrames() => _lastFrame = null;
 
   /// 挂断前: send the last captured screen frame once, so the conversation
   /// still has what was on screen when the call ended.
   Future<void> sendLastScreenFrame() async {
-    if (_screenFrames.isEmpty || _disposed) return;
-    final frame = _screenFrames.last;
+    final frame = _lastFrame;
+    if (frame == null || _disposed) return;
     final id = _id ?? await _session();
     if (id == null || _disposed) return;
     _follow(id);
@@ -158,12 +87,6 @@ class ChatCallConversation implements CallConversation {
 
   @override
   Future<bool> send(String text) async {
-    if (_isStopWatch(text)) {
-      stopWatching();
-    } else if (_isWatchRequest(text)) {
-      _watching = true;
-      _watchInstruction = text;
-    }
     final id = await _session();
     // The call ended while its conversation was made: nothing to follow.
     if (id == null || _disposed) return false;
@@ -181,20 +104,11 @@ class ChatCallConversation implements CallConversation {
     _tracking = true;
     _sawRunning = state.running;
     _last = '';
-    bool ok;
+    final bool ok;
     if (state.singleQuestion case final request? when state.openApproval == null) {
       ok = await chat.answer(request, [QuestionAnswer(request.questions.single.id, custom: text)]);
     } else {
-      final attachments = _screenAttachmentsFor(text);
-      final body = attachments.isEmpty
-          ? text
-          : '${appNote('（这是语音通话：你正在和我打电话，不是文字聊天。附上的图片是我当前屏幕的画面。不要逐条念出或播报图片里的内容；像正常打电话那样，用简短口语只说重要的、需要提醒我的信息，必要时用一两句描述画面即可。不要用 Markdown、列表或表格。）')}\n$text';
-      ok = await chat.send(body, attachments: attachments);
-      if (!ok && attachments.isNotEmpty) {
-        // The image was refused (a text-only model, or an invalid frame): the
-        // words still go, so the conversation is not blocked by the picture.
-        ok = await chat.send(text);
-      }
+      ok = await chat.send(text);
     }
     if (!ok) {
       _tracking = false;
@@ -207,30 +121,6 @@ class ChatCallConversation implements CallConversation {
       if (_tracking && !_sawRunning) _done();
     });
     return true;
-  }
-
-  /// 屏幕共享: pick the frames to ride along with this message. Nothing when the
-  /// person is not talking about the screen; the newest frame when they are; the
-  /// previous one too when they ask what changed or what went wrong.
-  List<DraftAttachment> _screenAttachmentsFor(String text) {
-    // While sharing is on, every spoken turn carries the latest frame: the
-    // person should not have to say "screen" for the AI to keep seeing it.
-    if (_screenFrames.isEmpty) return const [];
-    final picked = <Uint8List>[_screenFrames.last];
-    if (_asksWhatChanged(text) && _screenFrames.length >= 2) {
-      picked.add(_screenFrames[_screenFrames.length - 2]);
-    }
-    final stamp = DateTime.now().millisecondsSinceEpoch;
-    return [
-      for (var i = 0; i < picked.length; i++)
-        DraftAttachment.sniff('screen-$stamp-$i.jpg', picked[i]),
-    ];
-  }
-
-  /// Whether it asks about a change or a problem — then the previous frame helps.
-  static bool _asksWhatChanged(String text) {
-    const words = ['刚才', '之前', '怎么', '为什么', '变了', '报错', '出错', '错误', '怎么回事'];
-    return words.any(text.contains);
   }
 
   void _changed(ChatState state) {

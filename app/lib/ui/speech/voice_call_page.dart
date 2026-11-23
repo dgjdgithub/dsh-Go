@@ -21,6 +21,7 @@ import '../../companion/companion_voice.dart';
 import '../../companion/companion_voice_source.dart';
 import '../../l10n/l10n.dart';
 import '../../media/screen_capture.dart';
+import '../../media/screen_frame_store.dart';
 import '../../performance/performance_state.dart';
 import '../../state/android_features.dart' show operatingSystemProvider;
 import '../../speech/call/chat_call.dart';
@@ -121,9 +122,6 @@ class _VoiceCallPageState extends ConsumerState<VoiceCallPage> with WidgetsBindi
   /// window) and streams frames every few seconds until turned off.
   bool _sharing = false;
   StreamSubscription<Uint8List>? _shareSub;
-
-  /// 盯屏: last time a silent watch check went out (throttled to about every 5 s).
-  DateTime? _lastWatchAt;
 
   /// The system asks for less motion (read each build): the light holds still
   /// and the page comes in without its staggered rise.
@@ -337,7 +335,6 @@ class _VoiceCallPageState extends ConsumerState<VoiceCallPage> with WidgetsBindi
     final conversation = widget.conversation;
     if (conversation is ChatCallConversation) {
       conversation.clearScreenFrames();
-      conversation.stopWatching();
     }
     unawaited(ScreenCapture.stopSharing());
     unawaited(_live?.stop());
@@ -367,11 +364,7 @@ class _VoiceCallPageState extends ConsumerState<VoiceCallPage> with WidgetsBindi
       _shareSub = null;
       await ScreenCapture.stopSharing();
       final conversation = widget.conversation;
-      if (conversation is ChatCallConversation) {
-        conversation.clearScreenFrames();
-        conversation.stopWatching();
-      }
-      _lastWatchAt = null;
+      if (conversation is ChatCallConversation) conversation.clearScreenFrames();
       if (mounted) setState(() => _sharing = false);
       return;
     }
@@ -382,15 +375,8 @@ class _VoiceCallPageState extends ConsumerState<VoiceCallPage> with WidgetsBindi
         final conversation = widget.conversation;
         _shareSub = ScreenCapture.frames().listen((bytes) {
           // 每秒一帧：存最新帧；等你说话时随消息带给 AI，不单独发、不打断。
-          if (conversation is ChatCallConversation) {
-            conversation.pushScreenFrame(bytes);
-            final now = DateTime.now();
-            if (conversation.watching &&
-                (_lastWatchAt == null || now.difference(_lastWatchAt!) >= const Duration(seconds: 5))) {
-              _lastWatchAt = now;
-              unawaited(_watchCheck(conversation, bytes));
-            }
-          }
+          unawaited(ScreenFrameStore.write(bytes));
+          if (conversation is ChatCallConversation) conversation.pushScreenFrame(bytes);
         }, onError: (Object _) {
           if (!mounted) return;
           setState(() => _sharing = false);
@@ -406,17 +392,6 @@ class _VoiceCallPageState extends ConsumerState<VoiceCallPage> with WidgetsBindi
     } catch (_) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('此设备不支持屏幕共享')));
-    }
-  }
-
-  Future<void> _watchCheck(ChatCallConversation conversation, Uint8List frame) async {
-    final answer = await conversation.watchTick(frame);
-    if (!mounted || answer == null) return;
-    const gone = ['不在了', '没了', '不见了', '消失', '不在'];
-    if (gone.any(answer.contains)) {
-      conversation.stopWatching();
-      _lastWatchAt = null;
-      _call.announce('它不见了。');
     }
   }
 

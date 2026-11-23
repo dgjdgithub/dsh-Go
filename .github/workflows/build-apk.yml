@@ -89,7 +89,7 @@ jobs:
           path: |
             runtime/out
             runtime/.cache
-          key: runtime-${{ github.event.inputs.flavor || 'arm64' }}-${{ hashFiles('runtime/patches/pins.json', 'runtime/tawcroot/source.json', 'runtime/locks/*.json', 'runtime/build-runtime.sh') }}
+          key: runtime-${{ github.event.inputs.flavor || 'arm64' }}-${{ hashFiles('runtime/patches/pins.json', 'runtime/tawcroot/source.json', 'runtime/locks/*.json', 'runtime/build-runtime.sh', 'runtime/bridge/dsh-go-bridge/**') }}
 
       - name: Build runtime (rootfs + engine assets)
         env:
@@ -118,7 +118,7 @@ jobs:
           path: |
             runtime/out
             runtime/.cache
-          key: runtime-${{ github.event.inputs.flavor || 'arm64' }}-${{ hashFiles('runtime/patches/pins.json', 'runtime/tawcroot/source.json', 'runtime/locks/*.json', 'runtime/build-runtime.sh') }}
+          key: runtime-${{ github.event.inputs.flavor || 'arm64' }}-${{ hashFiles('runtime/patches/pins.json', 'runtime/tawcroot/source.json', 'runtime/locks/*.json', 'runtime/build-runtime.sh', 'runtime/bridge/dsh-go-bridge/**') }}
 
       - name: Build APK
         env:

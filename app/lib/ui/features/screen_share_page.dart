@@ -4,6 +4,7 @@ import 'dart:typed_data';
 import 'package:flutter/material.dart';
 
 import '../../media/screen_capture.dart';
+import '../../media/screen_frame_store.dart';
 import '../theme/app_icons.dart';
 import '../theme/glass.dart';
 import '../theme/theme.dart';
@@ -54,7 +55,10 @@ class _ScreenSharePageState extends State<ScreenSharePage> {
       }
       _stopSub();
       _sub = ScreenCapture.frames().listen(
-        (bytes) { if (mounted) setState(() { _frame = bytes; _busy = false; }); },
+        (bytes) {
+          unawaited(ScreenFrameStore.write(bytes));
+          if (mounted) setState(() { _frame = bytes; _busy = false; });
+        },
         onError: (e) { if (mounted) setState(() { _error = '读取画面失败：$e'; _busy = false; _sharing = false; }); },
       );
       setState(() { _sharing = true; _busy = false; });
