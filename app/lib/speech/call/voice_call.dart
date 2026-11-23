@@ -262,6 +262,16 @@ class VoiceCallController extends ChangeNotifier {
       if (_disposed || _phase == CallPhase.ended) return;
     } while (mine != _refreshing);
     if (cloud == null) {
+      // Just back from the background the connection may still be reconnecting,
+      // or the voice model still loading: wait a few seconds before giving up,
+      // instead of ending the call the moment it opens.
+      for (var i = 0; i < 12 && cloud == null; i++) {
+        await Future<void>.delayed(const Duration(milliseconds: 500));
+        if (_disposed || _phase == CallPhase.ended) return;
+        cloud = await recognizer();
+      }
+    }
+    if (cloud == null) {
       _end(CallEnd.noRecognizer);
       return;
     }

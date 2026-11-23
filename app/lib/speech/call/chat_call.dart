@@ -213,7 +213,9 @@ class ChatCallConversation implements CallConversation {
   /// person is not talking about the screen; the newest frame when they are; the
   /// previous one too when they ask what changed or what went wrong.
   List<DraftAttachment> _screenAttachmentsFor(String text) {
-    if (_screenFrames.isEmpty || !_asksAboutScreen(text)) return const [];
+    // While sharing is on, every spoken turn carries the latest frame: the
+    // person should not have to say "screen" for the AI to keep seeing it.
+    if (_screenFrames.isEmpty) return const [];
     final picked = <Uint8List>[_screenFrames.last];
     if (_asksWhatChanged(text) && _screenFrames.length >= 2) {
       picked.add(_screenFrames[_screenFrames.length - 2]);
@@ -223,15 +225,6 @@ class ChatCallConversation implements CallConversation {
       for (var i = 0; i < picked.length; i++)
         DraftAttachment.sniff('screen-$stamp-$i.jpg', picked[i]),
     ];
-  }
-
-  /// Whether what the person said refers to what is on screen.
-  static bool _asksAboutScreen(String text) {
-    const words = [
-      '屏幕', '画面', '看看', '看一下', '看下', '这个', '这里', '上面', '界面', '页面', '显示', '图',
-      '报错', '出错', '错误', '怎么回事', '为什么',
-    ];
-    return words.any(text.contains);
   }
 
   /// Whether it asks about a change or a problem — then the previous frame helps.

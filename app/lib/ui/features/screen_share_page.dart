@@ -55,7 +55,7 @@ class _ScreenSharePageState extends State<ScreenSharePage> {
       _stopSub();
       _sub = ScreenCapture.frames().listen(
         (bytes) { if (mounted) setState(() { _frame = bytes; _busy = false; }); },
-        onError: (e) { if (mounted) setState(() { _error = '读取画面失败：$e'; _busy = false; }); },
+        onError: (e) { if (mounted) setState(() { _error = '读取画面失败：$e'; _busy = false; _sharing = false; }); },
       );
       setState(() { _sharing = true; _busy = false; });
     } catch (e) {

@@ -136,7 +136,12 @@ class ScreenCapturePlugin : FlutterPlugin, ActivityAware, MethodChannel.MethodCa
         val mgr = context.getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
         val p = mgr.getMediaProjection(resultCode, data) ?: return null
         p.registerCallback(object : MediaProjection.Callback() {
-            override fun onStop() { stopSharing() }
+            override fun onStop() {
+                // Tell Dart the stream ended (lock screen, system revoke) so the
+                // UI stops claiming it is still sharing.
+                main.post { sink?.error("projection_stopped", "屏幕共享已被系统停止", null) }
+                stopSharing()
+            }
         }, main)
         projection = p
         return p

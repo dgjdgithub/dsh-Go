@@ -391,6 +391,12 @@ class _VoiceCallPageState extends ConsumerState<VoiceCallPage> with WidgetsBindi
               unawaited(_watchCheck(conversation, bytes));
             }
           }
+        }, onError: (Object _) {
+          if (!mounted) return;
+          setState(() => _sharing = false);
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('屏幕共享已停止，可重新点共享屏幕')),
+          );
         });
       }
       setState(() => _sharing = started);
