@@ -15,16 +15,17 @@ const CANDIDATES = [
 
 function latest() {
   let best = null;
+  const tried = [];
   for (const path of CANDIDATES) {
     try {
       const stat = statSync(path);
-      if (!stat.isFile() || stat.size === 0) continue;
+      if (!stat.isFile() || stat.size === 0) { tried.push(`${path}: empty`); continue; }
       if (!best || stat.mtimeMs > best.mtimeMs) best = { path, mtimeMs: stat.mtimeMs, size: stat.size };
-    } catch {
-      // Missing candidate: try the next one.
+    } catch (error) {
+      tried.push(`${path}: ${error && error.code ? error.code : 'missing'}`);
     }
   }
-  return best;
+  return { best, tried };
 }
 
 /** Registers the tool; returns its disposer. */
@@ -34,6 +35,7 @@ export function registerScreenTool(ctx) {
     description:
       '查看手机当前屏幕：返回最新的一张屏幕截图（图片）。当用户让你看屏幕、问屏幕上的内容，'
       + '或让你盯着屏幕上的某样东西时调用。要持续观察时，可以隔几秒重复调用本工具（或用 bash 的 sleep 控制间隔）。'
+      + '这个工具只依赖用户开启的“屏幕共享”，不需要手机操控/无障碍权限；不要改用手机操控里的 screen 工具。'
       + '如果用户还没开启屏幕共享，会返回没有画面的说明。',
     parameters: {
       type: 'object',
@@ -55,11 +57,16 @@ export function registerScreenTool(ctx) {
       ],
     },
     async execute() {
-      const frame = latest();
+      const { best: frame, tried } = latest();
       if (!frame) {
-        return { text: '现在没有可用的屏幕画面：用户还没有开启屏幕共享，或者画面还没传过来。' };
+        return { text: '现在没有可用的屏幕画面：用户还没有开启屏幕共享，或者画面还没传过来。检查过：' + tried.join('; ') };
       }
-      const bytes = readFileSync(frame.path);
+      let bytes;
+      try {
+        bytes = readFileSync(frame.path);
+      } catch (error) {
+        return { text: `找到画面文件但读不了：${frame.path}（${error && error.code ? error.code : error}）` };
+      }
       const age = Math.max(0, Math.round((Date.now() - frame.mtimeMs) / 1000));
       return {
         text: `这是手机当前屏幕的最新画面（约 ${age} 秒前）。`,

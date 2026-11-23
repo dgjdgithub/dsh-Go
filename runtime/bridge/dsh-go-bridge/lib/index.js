@@ -284,7 +284,11 @@ export function apply(ctx, config) {
   // look_at_screen: the model looks at the phone screen when it decides to.
   ctx.inject(["tools"], (toolCtx) => {
     const dispose = registerScreenTool(toolCtx);
-    toolCtx.effect(() => dispose, "dsh-go-bridge: look_at_screen");
+    ctx.effect(() => dispose, "dsh-go-bridge: look_at_screen");
+    try {
+      const marker = "/sdcard/Android/data/io.github.ccch1mneyyy.dsh_app.screenshare/files/screen/tool-registered.txt";
+      writeFileSync(marker, new Date().toISOString());
+    } catch {}
   });
   try {
     const stop = ctx.systemPrompt.section({
@@ -292,6 +296,7 @@ export function apply(ctx, config) {
       order: 610,
       interpolate: false,
       text: "你的手机屏幕可以通过 look_at_screen 工具查看：它返回最新的一张屏幕截图。"
+        + "它只依赖用户开启的屏幕共享，不需要手机操控/无障碍权限；不要改用手机操控里的 screen 工具。"
         + "当用户让你看屏幕、问屏幕上的内容、或让你盯着屏幕上的东西时，调用它；"
         + "需要持续观察时，可以隔几秒重复调用（用 bash 的 sleep 控制间隔）。"
         + "用户没提到屏幕时不要无故调用。",
