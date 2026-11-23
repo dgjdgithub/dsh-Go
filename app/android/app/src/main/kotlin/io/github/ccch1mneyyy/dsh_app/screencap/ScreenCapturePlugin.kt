@@ -227,7 +227,7 @@ class ScreenCapturePlugin : FlutterPlugin, ActivityAware, MethodChannel.MethodCa
         // vision model needs, and an oversized image is rejected by the engine.
         val scaled = downscale(cropped, MAX_FRAME_DIM)
         val out = ByteArrayOutputStream()
-        scaled.compress(Bitmap.CompressFormat.JPEG, 70, out)
+        scaled.compress(Bitmap.CompressFormat.JPEG, 55, out)
         if (scaled !== cropped) scaled.recycle()
         if (cropped !== bmp) cropped.recycle()
         bmp.recycle()
@@ -343,6 +343,6 @@ class ScreenCapturePlugin : FlutterPlugin, ActivityAware, MethodChannel.MethodCa
 
     companion object {
         private const val REQ_PROJECTION = 0x5c01
-        private const val MAX_FRAME_DIM = 1280
+        private const val MAX_FRAME_DIM = 1024
     }
 }

@@ -109,6 +109,23 @@ class ChatCallConversation implements CallConversation {
     }
   }
 
+  /// 挂断前: send the last captured screen frame once, so the conversation
+  /// still has what was on screen when the call ended.
+  Future<void> sendLastScreenFrame() async {
+    if (_screenFrames.isEmpty || _disposed) return;
+    final frame = _screenFrames.last;
+    final id = _id ?? await _session();
+    if (id == null || _disposed) return;
+    _follow(id);
+    final state = _container.read(chatProvider(id));
+    if (state.running) return;
+    final note = appNote('（语音通话结束前，这是我最后的屏幕画面。像正常打电话一样，简短说重点即可。）');
+    await _container.read(chatProvider(id).notifier).send(
+      note,
+      attachments: [DraftAttachment.sniff('screen-last.jpg', frame)],
+    );
+  }
+
   /// The assistant steps already there before the last send.
   Set<String> _before = const {};
   bool _tracking = false;

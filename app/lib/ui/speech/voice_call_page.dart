@@ -352,6 +352,8 @@ class _VoiceCallPageState extends ConsumerState<VoiceCallPage> with WidgetsBindi
 
   void _hangUp() {
     HapticFeedback.heavyImpact();
+    final conversation = widget.conversation;
+    if (conversation is ChatCallConversation) unawaited(conversation.sendLastScreenFrame());
     _call.hangUp();
   }
 
