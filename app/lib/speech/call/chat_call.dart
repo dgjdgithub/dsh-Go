@@ -31,18 +31,24 @@ class ChatCallConversation implements CallConversation {
   String? _id;
   bool _disposed = false;
 
-  /// 屏幕共享: the newest captured frame, kept only for the hang-up snapshot.
-  Uint8List? _lastFrame;
+  /// 屏幕共享: the most recent captured frames (oldest first). While sharing is
+  /// on every spoken turn carries the newest one, so the AI always sees the
+  /// screen when the person talks; the look_at_screen tool is there for the
+  /// model to look on its own too.
+  final List<Uint8List> _screenFrames = [];
 
-  void pushScreenFrame(Uint8List frame) => _lastFrame = frame;
+  void pushScreenFrame(Uint8List frame) {
+    _screenFrames.add(frame);
+    if (_screenFrames.length > 4) _screenFrames.removeAt(0);
+  }
 
-  void clearScreenFrames() => _lastFrame = null;
+  void clearScreenFrames() => _screenFrames.clear();
 
   /// 挂断前: send the last captured screen frame once, so the conversation
   /// still has what was on screen when the call ended.
   Future<void> sendLastScreenFrame() async {
-    final frame = _lastFrame;
-    if (frame == null || _disposed) return;
+    if (_screenFrames.isEmpty || _disposed) return;
+    final frame = _screenFrames.last;
     final id = _id ?? await _session();
     if (id == null || _disposed) return;
     _follow(id);
@@ -108,7 +114,15 @@ class ChatCallConversation implements CallConversation {
     if (state.singleQuestion case final request? when state.openApproval == null) {
       ok = await chat.answer(request, [QuestionAnswer(request.questions.single.id, custom: text)]);
     } else {
-      ok = await chat.send(text);
+      final attachments = _screenAttachmentsFor(text);
+      final body = attachments.isEmpty
+          ? text
+          : '${appNote('（这是语音通话：你正在和我打电话，不是文字聊天。附上的图片是我当前屏幕的画面。不要逐条念出或播报图片里的内容；像正常打电话那样，用简短口语只说重要的、需要提醒我的信息，必要时用一两句描述画面即可。不要用 Markdown、列表或表格。）')}\n$text';
+      ok = await chat.send(body, attachments: attachments);
+      if (!ok && attachments.isNotEmpty) {
+        // The image was refused: the words still go.
+        ok = await chat.send(text);
+      }
     }
     if (!ok) {
       _tracking = false;
@@ -121,6 +135,26 @@ class ChatCallConversation implements CallConversation {
       if (_tracking && !_sawRunning) _done();
     });
     return true;
+  }
+
+  /// While sharing is on, every spoken turn carries the latest frame; a
+  /// change/error question also carries the one before it for comparison.
+  List<DraftAttachment> _screenAttachmentsFor(String text) {
+    if (_screenFrames.isEmpty) return const [];
+    final picked = <Uint8List>[_screenFrames.last];
+    if (_asksWhatChanged(text) && _screenFrames.length >= 2) {
+      picked.add(_screenFrames[_screenFrames.length - 2]);
+    }
+    final stamp = DateTime.now().millisecondsSinceEpoch;
+    return [
+      for (var i = 0; i < picked.length; i++)
+        DraftAttachment.sniff('screen-$stamp-$i.jpg', picked[i]),
+    ];
+  }
+
+  static bool _asksWhatChanged(String text) {
+    const words = ['刚才', '之前', '怎么', '为什么', '变了', '报错', '出错', '错误', '怎么回事'];
+    return words.any(text.contains);
   }
 
   void _changed(ChatState state) {
