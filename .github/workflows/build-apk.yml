@@ -157,7 +157,7 @@ jobs:
             side=(--side)
             export DSH_SIDE_SUFFIX=.screenshare DSH_SIDE_LABEL="DSH Go 共享版"
           fi
-          tooling/build-apk.sh --flavor "$FLAVOR" --"$MODE" "${side[@]}"
+          tooling/build-apk.sh --flavor "$FLAVOR" --"$MODE" --no-companion "${side[@]}"
       - name: Upload APKs
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
