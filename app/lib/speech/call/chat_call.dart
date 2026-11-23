@@ -9,6 +9,7 @@ import 'dart:typed_data';
 import 'package:dsh_client/dsh_client.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../state/app_notes.dart';
 import '../../state/attachments.dart';
 import '../../state/chat_state.dart';
 import '../../state/hosts_state.dart';
@@ -82,9 +83,12 @@ class ChatCallConversation implements CallConversation {
         for (final item in state.items)
           if (item is AssistantChatItem) item.key,
       };
-      final ok = await _container.read(chatProvider(id).notifier).send(
-        '（屏幕监控，不要朗读这条）看这张截图。我之前让你盯的是：$_watchInstruction。'
+      final note = appNote(
+        '（屏幕监控检查，不要朗读这条，也不要在聊天里显示。）看这张截图。我之前让你盯的是：$_watchInstruction。'
         '如果它已经不在了，只回答“不在了”；否则只回答“还在”。不要解释。',
+      );
+      final ok = await _container.read(chatProvider(id).notifier).send(
+        note,
         attachments: [DraftAttachment.sniff('watch.jpg', frame)],
       );
       if (!ok) return null;
@@ -165,7 +169,10 @@ class ChatCallConversation implements CallConversation {
       ok = await chat.answer(request, [QuestionAnswer(request.questions.single.id, custom: text)]);
     } else {
       final attachments = _screenAttachmentsFor(text);
-      ok = await chat.send(text, attachments: attachments);
+      final body = attachments.isEmpty
+          ? text
+          : '${appNote('（这是语音通话。附上了我屏幕的最新画面。请像平时说话一样简短、口语化地回答，不要念图片内容、不要用 Markdown、列表或表格。）')}\n$text';
+      ok = await chat.send(body, attachments: attachments);
       if (!ok && attachments.isNotEmpty) {
         // The image was refused (a text-only model, or an invalid frame): the
         // words still go, so the conversation is not blocked by the picture.
