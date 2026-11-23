@@ -12,6 +12,7 @@
   },
   "files": [
     "lib/index.js",
+    "lib/screen-tool.js",
     "lib/plugin-config.js",
     "lib/web-promise.js",
     "lib/session-deletion.js",

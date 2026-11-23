@@ -10,6 +10,7 @@
 import 'dart:async';
 import 'dart:io';
 import 'dart:math' as math;
+import 'dart:typed_data';
 import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
@@ -19,6 +20,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../companion/companion_voice.dart';
 import '../../companion/companion_voice_source.dart';
 import '../../l10n/l10n.dart';
+import '../../media/screen_capture.dart';
+import '../../media/screen_frame_store.dart';
 import '../../performance/performance_state.dart';
 import '../../state/android_features.dart' show operatingSystemProvider;
 import '../../speech/call/chat_call.dart';
@@ -117,6 +120,12 @@ class _VoiceCallPageState extends ConsumerState<VoiceCallPage> with WidgetsBindi
 
   /// A finger on the light: it gives a little.
   bool _pressed = false;
+
+  /// 屏幕共享: the projection token is held while sharing; each tap of the key
+  /// asks once (the system sheet lets the person pick the whole screen or one
+  /// window) and streams frames every few seconds until turned off.
+  bool _sharing = false;
+  StreamSubscription<Uint8List>? _shareSub;
 
   /// The system asks for less motion (read each build): the light holds still
   /// and the page comes in without its staggered rise.
@@ -356,12 +365,21 @@ class _VoiceCallPageState extends ConsumerState<VoiceCallPage> with WidgetsBindi
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state == AppLifecycleState.paused || state == AppLifecycleState.hidden) _call.backgrounded();
+    // 允许后台: the call keeps going when the app is backgrounded (the native
+    // call foreground service holds the microphone and playback). Coming back
+    // just resumes drawing. Only an explicit hang-up ends the call.
+    if (state == AppLifecycleState.resumed) setState(() {});
   }
 
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    _shareSub?.cancel();
+    final conversation = widget.conversation;
+    if (conversation is ChatCallConversation) {
+      conversation.clearScreenFrames();
+    }
+    unawaited(ScreenCapture.stopSharing());
     unawaited(_live?.stop());
     _leave?.cancel();
     _enter.dispose();
@@ -376,7 +394,50 @@ class _VoiceCallPageState extends ConsumerState<VoiceCallPage> with WidgetsBindi
 
   void _hangUp() {
     HapticFeedback.heavyImpact();
+    final conversation = widget.conversation;
+    if (conversation is ChatCallConversation) unawaited(conversation.sendLastScreenFrame());
     _call.hangUp();
+  }
+
+  /// 共享屏幕: toggle continuous capture. Turning on asks the system once
+  /// (the person picks the whole screen or one window) and then streams frames;
+  /// turning off stops it.
+  Future<void> _toggleScreenShare() async {
+    HapticFeedback.selectionClick();
+    if (_sharing) {
+      _shareSub?.cancel();
+      _shareSub = null;
+      await ScreenCapture.stopSharing();
+      final conversation = widget.conversation;
+      if (conversation is ChatCallConversation) conversation.clearScreenFrames();
+      if (mounted) setState(() => _sharing = false);
+      return;
+    }
+    try {
+      final started = await ScreenCapture.startSharing(intervalMs: 1000);
+      if (!mounted) return;
+      if (started) {
+        final conversation = widget.conversation;
+        _shareSub = ScreenCapture.frames().listen((bytes) {
+          // 每秒一帧：存最新帧；等你说话时随消息带给 AI，不单独发、不打断。
+          unawaited(ScreenFrameStore.write(bytes));
+          if (conversation is ChatCallConversation) conversation.pushScreenFrame(bytes);
+        }, onError: (Object _) {
+          if (!mounted) return;
+          setState(() => _sharing = false);
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('屏幕共享已停止，可重新点共享屏幕')),
+          );
+        });
+      }
+      setState(() => _sharing = started);
+      if (!started) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('未授予屏幕共享权限')));
+      }
+    } catch (_) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('此设备不支持屏幕共享')));
+    }
   }
 
   (String, bool) _status(L10n l10n) {
@@ -701,6 +762,18 @@ class _VoiceCallPageState extends ConsumerState<VoiceCallPage> with WidgetsBindi
                               onTap: ended ? null : () => _call.setMuted(!_call.muted),
                             ),
                             distance: 28,
+                          ),
+                          _rise(
+                            0.44,
+                            CallKey(
+                              key: const ValueKey('call-share-screen'),
+                              icon: AppIcons.shareImage,
+                              label: _sharing ? '停止共享' : '共享屏幕',
+                              on: _sharing,
+                              blur: keyBlur,
+                              onTap: ended ? null : () => unawaited(_toggleScreenShare()),
+                            ),
+                            distance: 26,
                           ),
                           _rise(
                             0.48,

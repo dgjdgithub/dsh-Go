@@ -22,7 +22,9 @@ val hasWholeReleaseKey = listOf("storeFile", "keyAlias").all { !keyProps.getProp
 // Side-by-side test builds (tooling/build-apk.sh --side): their own package and launcher
 // name, so they install next to the released app instead of over it. Same signing key.
 val sideBuild = providers.environmentVariable("DSH_SIDE_BUILD").orNull == "1"
-val sideSuffix = ".test"
+// Overridable so a feature build (e.g. 屏幕共享版) can install beside both the release and .test builds.
+val sideSuffix = providers.environmentVariable("DSH_SIDE_SUFFIX").orNull ?: ".test"
+val sideLabel = providers.environmentVariable("DSH_SIDE_LABEL").orNull ?: "DSH Go 测试"
 // Static shortcuts name their target package literally; a side build's release
 // resources get a copy naming its own (registered further down).
 abstract class SideShortcuts : DefaultTask() {
@@ -74,7 +76,7 @@ android {
     defaultConfig {
         applicationId = "io.github.ccch1mneyyy.dsh_app"
         if (sideBuild) applicationIdSuffix = sideSuffix
-        manifestPlaceholders["appLabel"] = if (sideBuild) "DSH Go 测试" else "DSH Go"
+        manifestPlaceholders["appLabel"] = if (sideBuild) sideLabel else "DSH Go"
         // java.nio.file (symlinks while unpacking the rootfs) needs API 26.
         minSdk = 26
         // Target 28 like Termux, so the API 29+ exec restriction on app-private

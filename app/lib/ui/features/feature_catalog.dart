@@ -42,6 +42,7 @@ import 'feature_widgets.dart' show openSessionInChat;
 import 'jobs_page.dart';
 import 'permission_page.dart';
 import 'schedules_page.dart';
+import 'screen_share_page.dart';
 import 'session_export_page.dart';
 import 'skills_page.dart';
 
@@ -263,6 +264,13 @@ final featureSections = <FeatureSection>[
       tile: FeatureKind.subagents,
       needsSession: true,
       action: (context, ref, id) => SessionDetailPage.open(context, _session(id), tab: SessionTab.subagents),
+    ),
+    FeatureItem.localized(
+      id: 'screen-share',
+      title: (l10n) => l10n.catalogScreenShare,
+      summary: (l10n) => l10n.catalogScreenShareSummary,
+      icon: AppIcons.camera,
+      native: (id) => const ScreenSharePage(),
     ),
     FeatureItem.localized(
       id: 'reference',

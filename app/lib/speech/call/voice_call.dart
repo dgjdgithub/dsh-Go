@@ -262,6 +262,16 @@ class VoiceCallController extends ChangeNotifier {
       if (_disposed || _phase == CallPhase.ended) return;
     } while (mine != _refreshing);
     if (cloud == null) {
+      // Just back from the background the connection may still be reconnecting,
+      // or the voice model still loading: wait a few seconds before giving up,
+      // instead of ending the call the moment it opens.
+      for (var i = 0; i < 12 && cloud == null; i++) {
+        await Future<void>.delayed(const Duration(milliseconds: 500));
+        if (_disposed || _phase == CallPhase.ended) return;
+        cloud = await recognizer();
+      }
+    }
+    if (cloud == null) {
       _end(CallEnd.noRecognizer);
       return;
     }
@@ -620,6 +630,16 @@ class VoiceCallController extends ChangeNotifier {
   }
 
   void hangUp() => _end(CallEnd.hungUp);
+
+  /// 盯屏: say a short sentence now, outside a turn — used when a watched thing
+  /// on the screen disappears, so the person hears it in the call.
+  void announce(String text) {
+    if (_phase == CallPhase.ended || text.trim().isEmpty) return;
+    final out = _out ??= _newVoice();
+    out.add(text);
+    out.finish();
+    if (_phase != CallPhase.speaking) _set(CallPhase.speaking);
+  }
 
   /// The app went to the background: Android gives a backgrounded app no
   /// microphone, so the call ends rather than listen to silence.

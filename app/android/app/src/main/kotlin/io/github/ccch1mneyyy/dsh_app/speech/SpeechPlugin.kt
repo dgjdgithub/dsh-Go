@@ -242,6 +242,9 @@ class SpeechPlugin : FlutterPlugin, ActivityAware, MethodChannel.MethodCallHandl
         }
         capture = c
         keepScreenOn(true)
+        // 允许后台: hold the process at foreground priority so the microphone
+        // survives the app going to the background.
+        CallForegroundService.start(context)
         syncPlaying()
         return "ok"
     }
@@ -289,6 +292,7 @@ class SpeechPlugin : FlutterPlugin, ActivityAware, MethodChannel.MethodCallHandl
 
     @Suppress("DEPRECATION")
     private fun endCall() {
+        CallForegroundService.stop(context)
         val c = capture
         capture = null
         c?.stop()
