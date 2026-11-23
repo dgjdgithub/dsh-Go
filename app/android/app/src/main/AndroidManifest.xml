@@ -9,6 +9,8 @@
     <!-- 语音通话后台保活: a microphone-type foreground service keeps the call's
          AudioRecord alive when the app is backgrounded. -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
+    <!-- 屏幕共享: MediaProjection capture held by a mediaProjection foreground service. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <!-- The live activity (notify/LiveActivity.kt): Android 16 QPR1+ promotes it to a Live Update.
          Normal, granted at install; older systems skip a permission they don't define. -->
@@ -258,6 +260,12 @@
                 android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
                 android:value="Runs the user's local DeepSeek Harness agent server" />
         </service>
+
+        <!-- 屏幕共享: ongoing notification + foreground priority while capturing. -->
+        <service
+            android:name=".screencap.ScreenShareService"
+            android:exported="false"
+            android:foregroundServiceType="mediaProjection" />
 
         <!-- 语音通话后台保活: keeps the call's microphone alive when backgrounded. -->
         <service

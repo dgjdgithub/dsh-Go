@@ -57,6 +57,7 @@ class ScreenCapturePlugin : FlutterPlugin, ActivityAware, MethodChannel.MethodCa
     private var virtualDisplay: VirtualDisplay? = null
 
     private var sharing = false
+    private var shareService = false
     private var intervalMs = 3000L
     private var latestJpeg: ByteArray? = null
 
@@ -181,6 +182,11 @@ class ScreenCapturePlugin : FlutterPlugin, ActivityAware, MethodChannel.MethodCa
 
         sharing = true
         latestJpeg = null
+        // Ongoing status-bar notification + foreground priority (mediaProjection type).
+        runCatching {
+            ScreenShareService.start(context)
+            shareService = true
+        }
         threadHandler.post(frameTick)
         result.success(null)
     }
@@ -322,6 +328,10 @@ class ScreenCapturePlugin : FlutterPlugin, ActivityAware, MethodChannel.MethodCa
 
     private fun stopSharing() {
         sharing = false
+        if (shareService) {
+            appContext?.let { runCatching { ScreenShareService.stop(it) } }
+            shareService = false
+        }
         handler?.removeCallbacksAndMessages(null)
         runCatching { virtualDisplay?.release() }; virtualDisplay = null
         runCatching { imageReader?.close() }; imageReader = null
